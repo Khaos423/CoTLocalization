@@ -89,7 +89,7 @@ def detect_version(type_dir: str = "cot") -> str:
     if not candidates:
         raise FileNotFoundError(f"未在 {base} 下找到版本目录")
     # 选择最近修改的版本目录
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    candidates.sort(key=lambda p: p.stat().st_uid, reverse=True)
     version = candidates[0].name
     logger.info(f"检测到版本: {version}")
     return version
