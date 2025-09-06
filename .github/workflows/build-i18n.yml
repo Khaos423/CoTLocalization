@@ -45,3 +45,94 @@ jobs:
           name: i18n-${{ env.I18N_VERSION }}
           path: translated_source\${{ env.I18N_VERSION }}\i18n.json
           if-no-files-found: error
+
+      - name: Download latest ModI18N release zip
+        uses: robinraju/release-downloader@v1.10
+        with:
+          repository: BlackTeaPie/Course-of-Temptation-Chinese-Localization
+          latest: true
+          fileName: "ModI18N*.zip"
+          out-file-path: mod-src
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Mod workspace and version values
+        shell: pwsh
+        run: |
+          $asset = Get-ChildItem -Path "mod-src" -Filter "ModI18N*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $asset) { throw "No ModI18N zip asset downloaded." }
+          echo "MOD_ZIP=$($asset.FullName)" >> $env:GITHUB_ENV
+          $name = [System.IO.Path]::GetFileNameWithoutExtension($asset.Name)
+          # Expect asset name like: ModI18N-0.7.1-c.zip
+          $verWithLetter = $name -replace '^ModI18N-',''
+          $numericVer = $verWithLetter -replace '-[a-zA-Z]$',''
+          echo "MOD_VER_WITH_LETTER=$verWithLetter" >> $env:GITHUB_ENV
+          echo "MOD_VER_NUMERIC=$numericVer" >> $env:GITHUB_ENV
+          $displayVer = "v$numericVer-chs-0.0.0"
+          echo "MOD_VER_DISPLAY=$displayVer" >> $env:GITHUB_ENV
+          Write-Host "Asset: $($asset.Name)"
+          Write-Host "MOD_VER_WITH_LETTER=$verWithLetter"
+          Write-Host "MOD_VER_NUMERIC=$numericVer"
+          Write-Host "MOD_VER_DISPLAY=$displayVer"
+          Write-Host "I18N_VERSION(built)=${{ env.I18N_VERSION }}"
+
+      - name: Extract ModI18N zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "mod-work" -Force | Out-Null
+          Expand-Archive -Path "${{ env.MOD_ZIP }}" -DestinationPath "mod-work" -Force
+          Write-Host "Extracted to mod-work"
+
+      - name: Replace i18n.json
+        shell: pwsh
+        run: |
+          $src = "translated_source\${{ env.I18N_VERSION }}\i18n.json"
+          if (!(Test-Path $src)) { throw "Built i18n.json not found at $src" }
+          $targets = Get-ChildItem -Path "mod-work" -Filter "i18n.json" -Recurse
+          if (!$targets) { throw "No i18n.json found inside ModI18N zip" }
+          foreach ($t in $targets) {
+            Copy-Item -Path $src -Destination $t.FullName -Force
+            Write-Host "Replaced: $($t.FullName)"
+          }
+
+      - name: Patch boot.json versions
+        shell: pwsh
+        run: |
+          $boot = Get-ChildItem -Path "mod-work" -Filter "boot.json" -Recurse | Select-Object -First 1
+          if (-not $boot) { throw "boot.json not found in extracted ModI18N" }
+          $content = Get-Content -LiteralPath $boot.FullName -Raw
+          # 1) "version": "=xxxx" -> "={MOD_VER_WITH_LETTER}"
+          $content = [regex]::Replace($content, '("version"\s*:\s*")=([^"]*)(")', { param($m) $m.Groups[1].Value + "=${{ env.MOD_VER_WITH_LETTER }}" + $m.Groups[3].Value })
+          # 2) "version": "..." (not starting with '=') -> v{numeric}-chs-0.0.0
+          $display = "${{ env.MOD_VER_DISPLAY }}"
+          $content = [regex]::Replace($content, '("version"\s*:\s*")(?!\=)[^"]*(")', { param($m) $m.Groups[1].Value + $display + $m.Groups[2].Value })
+          Set-Content -LiteralPath $boot.FullName -Value $content -Encoding utf8
+          Write-Host "Patched: $($boot.FullName)"
+
+      - name: Install 7-Zip
+        shell: pwsh
+        run: |
+          choco install 7zip -y
+          $env:Path += ";C:\Program Files\7-Zip"
+          7z i | Out-Null
+          Write-Host "7-Zip installed"
+
+      - name: Repack ModI18N zip (Deflate, level 6)
+        shell: pwsh
+        run: |
+          $outDir = "dist"
+          New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+          $assetName = [System.IO.Path]::GetFileName("${{ env.MOD_ZIP }}")
+          $outZip = Join-Path $outDir $assetName
+          if (Test-Path $outZip) { Remove-Item $outZip -Force }
+          Push-Location "mod-work"
+          & 7z a -tzip -mx=6 -mm=Deflate -r "..\$outZip" * | Write-Output
+          Pop-Location
+          echo "MOD_OUT_ZIP=$outZip" >> $env:GITHUB_ENV
+          Write-Host "Created: $outZip"
+
+      - name: Upload ModI18N zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ModI18N-${{ env.I18N_VERSION }}
+          path: ${{ env.MOD_OUT_ZIP }}
+          if-no-files-found: error
