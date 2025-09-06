@@ -77,21 +77,24 @@ jobs:
           $asset = Get-ChildItem -Path "mod-src" -Filter "ModI18N*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $asset) { throw "No ModI18N zip asset downloaded." }
           echo "MOD_ZIP=$($asset.FullName)" >> $env:GITHUB_ENV
-          $name = [System.IO.Path]::GetFileNameWithoutExtension($asset.Name)
-          # Expect asset name like: ModI18N-0.7.1-c.zip
-          $verWithLetter = $name -replace '^ModI18N-',''
-          $numericVer = $verWithLetter -replace '-[a-zA-Z]$',''
-          $letter = ($verWithLetter -replace '.*-','')
-          echo "MOD_VER_WITH_LETTER=$verWithLetter" >> $env:GITHUB_ENV
-          echo "MOD_VER_NUMERIC=$numericVer" >> $env:GITHUB_ENV
-          echo "MOD_VER_LETTER=$letter" >> $env:GITHUB_ENV
-          $displayVer = "v$numericVer-chs-0.0.0"
-          echo "MOD_VER_DISPLAY=$displayVer" >> $env:GITHUB_ENV
-          Write-Host "Asset: $($asset.Name)"
-          Write-Host "MOD_VER_WITH_LETTER=$verWithLetter"
-          Write-Host "MOD_VER_NUMERIC=$numericVer"
-          Write-Host "MOD_VER_DISPLAY=$displayVer"
-          Write-Host "I18N_VERSION(built)=${{ env.I18N_VERSION }}"
+
+          # Derive versions strictly from I18N_VERSION
+          $i18n = $env:I18N_VERSION
+          $numeric = $i18n -replace '-[a-zA-Z]+$',''
+          if ($i18n -match '-([a-zA-Z]+)$') { $letter = $Matches[1] } else { $letter = "" }
+          if ($letter) { $withLetter = "$numeric-$letter" } else { $withLetter = $numeric }
+          $display = "v$numeric-chs-0.0.0"
+
+          echo "PKG_VER_NUMERIC=$numeric"       >> $env:GITHUB_ENV
+          echo "PKG_VER_LETTER=$letter"         >> $env:GITHUB_ENV
+          echo "PKG_VER_WITH_LETTER=$withLetter" >> $env:GITHUB_ENV
+          echo "PKG_VER_DISPLAY=$display"       >> $env:GITHUB_ENV
+
+          Write-Host "I18N_VERSION=$i18n"
+          Write-Host "PKG_VER_NUMERIC=$numeric"
+          Write-Host "PKG_VER_LETTER=$letter"
+          Write-Host "PKG_VER_WITH_LETTER=$withLetter"
+          Write-Host "PKG_VER_DISPLAY=$display"
 
       - name: Extract ModI18N zip
         shell: pwsh
@@ -117,12 +120,16 @@ jobs:
           $boot = Get-ChildItem -Path "mod-work" -Filter "boot.json" -Recurse | Select-Object -First 1
           if (-not $boot) { throw "boot.json not found in extracted ModI18N" }
           $content = Get-Content -LiteralPath $boot.FullName -Raw
-          $verLetter = "${{ env.MOD_VER_WITH_LETTER }}"
-          $display = "${{ env.MOD_VER_DISPLAY }}"
-          # Replace the "=xxxx" version
-          $content = [regex]::Replace($content, '("version"\s*:\s*")=([^"]*)(")', { param($m) $m.Groups[1].Value + "=$verLetter" + $m.Groups[3].Value })
-          # Replace the "v..." version with display version
+
+          $verLetter = $env:PKG_VER_WITH_LETTER
+          $display = $env:PKG_VER_DISPLAY
+
+          # Replace the '=...' variant
+          $content = [regex]::Replace($content, '("version"\s*:\s*")=([^"]*)(")', { param($m) $m.Groups[1].Value + "=" + $verLetter + $m.Groups[3].Value })
+
+          # Replace the 'v...' variant (not starting with '=')
           $content = [regex]::Replace($content, '("version"\s*:\s*")v[^"]*(")', { param($m) $m.Groups[1].Value + $display + $m.Groups[2].Value })
+
           Set-Content -LiteralPath $boot.FullName -Value $content -Encoding utf8
           Write-Host "Patched: $($boot.FullName)"
 
@@ -133,12 +140,12 @@ jobs:
           $env:Path += ";C:\Program Files\7-Zip"
           7z i | Out-Null
 
-      - name: Repack ModI18N zip (Deflate, level 6) with versioned name
+      - name: Repack ModI18N zip (Deflate, level 6) with I18N versioned name
         shell: pwsh
         run: |
           $outDir = "dist"
           New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-          $finalName = "ModI18N-$($env:MOD_VER_WITH_LETTER).zip"
+          $finalName = "ModI18N-$($env:I18N_VERSION).zip"
           $outZip = Join-Path $outDir $finalName
           if (Test-Path $outZip) { Remove-Item $outZip -Force }
           Push-Location "mod-work"
@@ -151,6 +158,6 @@ jobs:
       - name: Upload ModI18N zip artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ModI18N-${{ env.MOD_VER_WITH_LETTER }}
+          name: ModI18N-${{ env.I18N_VERSION }}
           path: ${{ env.MOD_OUT_ZIP }}
           if-no-files-found: error
