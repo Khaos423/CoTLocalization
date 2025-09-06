@@ -84,7 +84,7 @@ class JSParserV2:
                 else:
                     self.parse_function()
             elif ((("Class " in self.tempText) or ("class " in self.tempText)) and "\"Class " not in self.tempText and not self.in_object_block):
-                print(self.tempText)
+                # print(self.tempText)
                 self.tempText = ""
                 self.index += 1
             else:
@@ -174,7 +174,8 @@ class JSParserV2:
             object_in_array_parsr = JSParserV2(in_array=True)
             object_in_array_parsr.parse(content[1:])
             for obj in object_in_array_parsr.extracted_texts:
-                self.extracted_texts_push("array-object",obj['text'],start_position+obj['position'],obj['context'])
+                # 不传递内层context，避免出现重复的 <<POS:...>> 标记
+                self.extracted_texts_push("array-object",obj['text'],start_position+obj['position'],"")
             self.tempText = ""
             self.consume_until("\n")
             self.consume()
@@ -193,7 +194,7 @@ class JSParserV2:
         if self.peek()=="}" and self.peek(2) == ";":
             empty_object = True
         first_pro = self.consume_until(":")
-        print(f"==={first_pro}===")
+        # print(f"==={first_pro}===")
         self.consume()
         should_be_empty = self.consume_until("{").strip()
         self.index = start_index
@@ -201,7 +202,7 @@ class JSParserV2:
         should_extract_details = False
         if (not self.in_object_block and should_be_empty == "" and not self.in_array):
             should_extract_details = True
-        print(f"------------\nshoudebeempty{should_be_empty}||", not self.in_object_block, empty_object,"\n------------",(should_extract_details))
+        # print(f"------------\nshoudebeempty{should_be_empty}||", not self.in_object_block, empty_object,"\n------------",(should_extract_details))
         if (should_extract_details) and not empty_object:
             self.in_object_block = True
             open = True
@@ -371,7 +372,7 @@ class JSParserV2:
             """
             cleaned = []
             for char in key:
-                if char.isalnum() or char == '_':
+                if char.isalnum() or char == '_' or char == '.':
                     cleaned.append(char)
                 else:
                     # 避免重复的下划线
@@ -588,10 +589,9 @@ class JSParserV2:
                 # 提取等号前的单词
                 # 注意：原始正则是 (\w+)，不包含点号，所以我们向前提取一个单词即可
                 # 使用 _get_word_before 并取最后一部分可以模拟这个行为
-                var_path = _get_word_before(context_stripped, len(context_stripped) - 1)
-                if var_path:
-                    # 只取最后一部分 (例如 setup.myVar -> myVar)
-                    var_name = var_path
+                before_equal = context_stripped[:-1].rstrip()
+                if before_equal:
+                    var_name = before_equal
                     if var_name:
                         logger.debug(f"找到等号前变量名: {var_name}")
                         return f"var_{var_name}"
@@ -760,11 +760,25 @@ class JSParserV2:
 
     def extracted_texts_push(self,type,text,position,context=""):
         if not text.strip():return
-        text_lines = text.split("\n")
+        
+        offset = 0
+        for i, char in enumerate(text):
+            if char.strip():
+                offset = i
+                break
+        
+        final_position = position + offset
+
         if not context:
             contextMin = max(0,position-500)
             contextMax = min(len(self.content),position+100)
             context = (self.content[contextMin:contextMax])
+        else:
+            # 清理已有的尾部 <<POS:...>> 标记，避免嵌套重复
+            context = re.sub(r'(?:\s*(?:\r?\n)*)?(?:<<POS:\d+>>\s*)+$', '', context)
+        
+        context += f"\n\n<<POS:{final_position}>>"
+        
         if self.content[position]!=text[0]:
             print(type,[text],position,[self.content])
             a+1

@@ -44,7 +44,76 @@ class Replacer:
                 delta_index = 0
                 target_file_parts = []
                 last_idx = 0
-                pzdata.sort(key=lambda x:fetch_data[x['key']]['position'])
+
+                # 基于 context 内的 <<POS:...>> 获取位置（JS为文件绝对位置；Twee为段落正文内相对位置）
+                is_js_file = ("js" == root[-2]+root[-1])
+                passage_body_start_cache = {}
+
+                def extract_pos_from_context(ctx: str):
+                    if not ctx:
+                        return None
+                    matches = re.findall(r'<<POS:(\d+)>>', ctx)
+                    return int(matches[-1]) if matches else None
+
+                def get_passage_name_from_key(key: str):
+                    # Twee 的 key 形如 "{PassageName}_{fingerprint}"；PassageName 本身可能含有下划线
+                    if "_" in key:
+                        return key.rsplit("_", 1)[0]
+                    return key
+
+                def find_passage_body_start(passage_name: str):
+                    if not passage_name:
+                        return 0
+                    if passage_name in passage_body_start_cache:
+                        return passage_body_start_cache[passage_name]
+                    if passage_name == "Global":
+                        passage_body_start_cache[passage_name] = 0
+                        return 0
+                    # 在源码中查找段落标题行，计算正文起点（换行后第一个字符）
+                    pattern = re.compile(rf'(?m)^::[ \t]{re.escape(passage_name)}[ \t]*\r?\n')
+                    m = pattern.search(file_content)
+                    if m:
+                        start = m.end()
+                        passage_body_start_cache[passage_name] = start
+                        return start
+                    # 兜底：朴素查找
+                    idx_name = file_content.find(f":: {passage_name}")
+                    if idx_name != -1:
+                        nl_idx = file_content.find("\n", idx_name)
+                        start = (nl_idx + 1) if nl_idx != -1 else idx_name + len(passage_name) + 3
+                        passage_body_start_cache[passage_name] = start
+                        return start
+                    logger.warning(f"找不到段落头: {passage_name}，将使用文件起始作为基准")
+                    passage_body_start_cache[passage_name] = 0
+                    return 0
+
+                def compute_abs_position(entry):
+                    ctx = entry.get('context', '')
+                    pos_rel = extract_pos_from_context(ctx)
+                    if pos_rel is None:
+                        return None
+                    if is_js_file:
+                        return pos_rel  # JS 的 POS 为文件绝对位置
+                    # Twee 的 POS 为段落正文内相对位置，需要加上段落正文起点
+                    passage_name = get_passage_name_from_key(entry['key'])
+                    return find_passage_body_start(passage_name) + pos_rel
+
+                # 预计算每个词条的绝对位置，并基于该位置排序
+                positions_by_key = {}
+                for entry in pzdata:
+                    abs_pos = compute_abs_position(entry)
+                    if abs_pos is None:
+                        # 尽量不依赖 fetch 的 position；但为保证健壮性，提供兜底
+                        if entry['key'] in fetch_data:
+                            positions_by_key[entry['key']] = fetch_data[entry['key']]['position']
+                            logger.warning(f"{entry['key']} 的 context 中未找到 POS，回退到 fetch 位置")
+                        else:
+                            positions_by_key[entry['key']] = 10**12  # 放到末尾
+                            logger.warning(f"{entry['key']} 无法解析位置，放到末尾处理")
+                    else:
+                        positions_by_key[entry['key']] = abs_pos
+
+                pzdata.sort(key=lambda x: positions_by_key.get(x['key'], 10**12))
                 tempd = {}
                 for d in pzdata:
                     if 'stage' not in d or d['stage']!=1:
@@ -56,7 +125,8 @@ class Replacer:
                     else:
                         if not fetch_data[d['key']]['text']:continue
                         if fetch_data[d['key']]['text'] in "'\"`":continue
-                        position = fetch_data[d['key']]['position']
+                        # 使用由 context <<POS:...>> 解析得到的绝对位置
+                        position = positions_by_key.get(d['key'], fetch_data[d['key']]['position'])
                         translation = d['translation'] if d['translation'] else fetch_data[d['key']]['text']
                     # if translation.startswith("<br>") and translation!="<br><br>" and translation!="<br>" and "js" not in root:
                     #     if not (file_content[last_idx:position].endswith("<br>")):position+=4
@@ -91,134 +161,146 @@ class Replacer:
 
     def convert_to_i18n(self):
         i18n = {"typeB":{"TypeBOutputText":[],"TypeBInputStoryScript":[]}}
-        with open(self.fetchPath/"hash_dict.json", "r", encoding="utf-8") as fp:
-            hash_dict = json.load(fp)
+
+        # 完全依赖 trans 中 context 的 &lt;&lt;POS:...&gt;&gt;，不再使用 hash_dict 位置
+        def parse_pos_from_context(ctx: str):
+            if not ctx:
+                return None
+            m = re.findall(r'<<POS:(\d+)>>', ctx)
+            return int(m[-1]) if m else None
+
         for root, dirs, files in os.walk(self.transPath):
             for file in files:
                 with open(f"{root}\\{file}", "r", encoding="utf-8") as fp:
                     pzdata = json.load(fp)
-                # with open(f"{root.replace('trans','fetch')}\\{file}", "r", encoding="utf-8") as fp:
-                #     fetch_data = json.load(fp)
-                # logger.info(f"file {file} readed")
-                emojiDiffIdx = 0
-                lineChangeCount = 0
-                nowPassage = ""
-                hash_dict_now = {}
+
+                is_js_root = ("js" == root[-2]+root[-1])
+
+                # 分组：按目标输出文件名聚合（JS 为 fileprefix.js；Twee 为 PassageName.twee）
                 file_trans = {}
                 for d in pzdata:
-                    key=d['key'].split("_")
-                    keynum = key.pop(-1)
-                    if "js" not in root:
-                        passagename = key[0]
-                    else:
-                        passagename = "_".join(key)
-                    filename = passagename+(".js" if "js" in root else ".twee")
-                    if filename not in file_trans:
-                        file_trans[filename] = []
-                    if '过时' not in d['original']:file_trans[filename].append(d)
-                for filename in file_trans:
-                    key=file_trans[filename][0]['key'].split("_")
-                    keynum = key.pop(-1)
-                    if "js" not in root:
-                        passagename = key[0]
-                    else:
-                        passagename = "_".join(key)
-                    emojiDiffIdx=0
-                    hash_dict_now = hash_dict[passagename+(".js" if "js" in root else ".twee")]
-                    id_hash_dict = {}
-                    for hash in hash_dict_now:
-                        id_hash_dict[hash_dict_now[hash]['id']] = {"hash":hash,"position":hash_dict_now[hash]['position']}
-                    file_trans[filename].sort(key=lambda x: id_hash_dict[x['key']]['position'] if x['key'] in id_hash_dict else -1)
-                    for d in file_trans[filename]:
-                        key=d['key'].split("_")
-                        keynum = key.pop(-1)
-                        if "js" not in root:
-                            passagename = key[0]
-                        else:
-                            passagename = "_".join(key)
+                    if '过时' in d.get('original', ''):
+                        continue
+                    base_name = d['key'].rsplit("_", 1)[0]
+                    filename = base_name + (".js" if is_js_root else ".twee")
+                    file_trans.setdefault(filename, []).append(d)
 
-                        if 'stage' not in d or d['stage']!=1:
-                            if "过时" in d['original']:continue
-                            for char in d['original']:
+                for filename, entries in file_trans.items():
+                    emojiDiffIdx = 0
+                    if is_js_root:
+                        passagename = filename.replace(".js","")
+                    else:
+                        # 取首条的 key 推导段落名
+                        passagename = entries[0]['key'].rsplit("_", 1)[0]
+
+                    # 位置排序（缺失 POS 的放最后）
+                    entries.sort(key=lambda x: (parse_pos_from_context(x.get('context','')) if parse_pos_from_context(x.get('context','')) is not None else 10**12))
+
+                    for d in entries:
+                        # 仅处理 stage==1 的有效翻译
+                        if d.get('stage', 1) != 1:
+                            if "过时" in d.get('original', ''):
+                                continue
+                            for char in d.get('original', ''):
                                 if emoji.is_emoji(char):
                                     emojiDiffIdx += 1
                             continue
-                        if d['original']==d['translation']:
-                            for char in d['original']:
+                        if d.get('original', '') == d.get('translation', ''):
+                            for char in d.get('original', ''):
                                 if emoji.is_emoji(char):
                                     emojiDiffIdx += 1
                             continue
-                        passageStartpos = 0
-                        if d['key'] not in id_hash_dict:
-                            logger.warning(f"{d['key']} not exist!")
-                            for char in d['original']:
+
+                        pos = parse_pos_from_context(d.get('context',''))
+                        if pos is None:
+                            logger.warning(f"{d['key']} 的 context 未包含 POS，跳过")
+                            for char in d.get('original', ''):
                                 if emoji.is_emoji(char):
                                     emojiDiffIdx += 1
                             continue
-                        if "js" not in root:
-                            # passageStartpos = id_hash_dict[passagename+"_0"]["position"]
-                            for fd in hash_dict_now.values():
-                                if fd['type']=='passage_name':
-                                    passageStartpos = fd['position']+len(passagename)+1
-                                    break
+
+                        if not is_js_root:
+                            # Twee：POS 为段落正文内相对位置
                             d['original'] = d['original'].replace("\\n","\n")
                             d['translation'] = d['translation'].replace("\\n","\n")
 
                             orilist = re.split(r'(?<!\\)\n', d['original'])
                             translist = re.split(r'(?<!\\)\n', d['translation'])
-                            if len(orilist)!=len(translist):
+                            if len(orilist) != len(translist):
                                 logger.error(f"{d['key']} \\n error!")
-                                i18n['typeB']['TypeBInputStoryScript'].append({"pos":id_hash_dict[d['key']]['position']-passageStartpos+emojiDiffIdx,"pN":passagename.replace(" [widget]",""),"f":d['original'],"t":d['translation']})
+                                i18n['typeB']['TypeBInputStoryScript'].append({
+                                    "pos": pos + emojiDiffIdx,
+                                    "pN": passagename.replace(" [widget]",""),
+                                    "f": d['original'],
+                                    "t": d['translation']
+                                })
                                 for char in d['original']:
                                     if emoji.is_emoji(char):
                                         emojiDiffIdx += 1
                                 continue
-                            linepos = id_hash_dict[d['key']]['position']-passageStartpos
+
+                            linepos = pos
                             for i in range(len(translist)):
-                                if orilist[i]==translist[i]:
-                                    linepos+=len(orilist[i])+1
+                                if orilist[i] == translist[i]:
+                                    linepos += len(orilist[i]) + 1
                                 else:
-                                    lineidx=0
+                                    lineidx = 0
                                     for j in range(len(orilist[i])):
                                         if orilist[i][j].strip():
                                             lineidx = j
                                             break
-                                    i18n['typeB']['TypeBInputStoryScript'].append({"pos":linepos+lineidx+emojiDiffIdx,"pN":passagename.replace(" [widget]",""),"f":orilist[i].strip(),"t":translist[i].strip()})
-                                    linepos+=len(orilist[i])+1
+                                    i18n['typeB']['TypeBInputStoryScript'].append({
+                                        "pos": linepos + lineidx + emojiDiffIdx,
+                                        "pN": passagename.replace(" [widget]",""),
+                                        "f": orilist[i].strip(),
+                                        "t": translist[i].strip()
+                                    })
+                                    linepos += len(orilist[i]) + 1
                                 for char in orilist[i]:
                                     if emoji.is_emoji(char):
                                         emojiDiffIdx += 1
                         else:
+                            # JS：POS 为文件内绝对位置
                             d['original'] = d['original'].replace("\\n","\n")
                             d['translation'] = d['translation'].replace('\\\\n',"▲").replace("\\n","\n")
-                            
+
                             orilist = re.split(r'(?<!\\)\n', d['original'])
                             translist = re.split(r'(?<!\\)\n', d['translation'])
-                            if len(orilist)!=len(translist):
+                            if len(orilist) != len(translist):
                                 logger.error(f"{d['key']} \\n error!")
-                                i18n['typeB']['TypeBOutputText'].append({"pos":passageStartpos+id_hash_dict[d['key']]['position']-passageStartpos+emojiDiffIdx,"f":d['original'],"t":d['translation'].replace("▲","\\n"),"fileName":passagename+".js","js":True})
+                                i18n['typeB']['TypeBOutputText'].append({
+                                    "pos": pos + emojiDiffIdx,
+                                    "f": d['original'],
+                                    "t": d['translation'].replace("▲","\\n"),
+                                    "fileName": passagename + ".js",
+                                    "js": True
+                                })
                                 for char in d['original']:
                                     if emoji.is_emoji(char):
                                         emojiDiffIdx += 1
                                 continue
-                            linepos = id_hash_dict[d['key']]['position']-passageStartpos
+
+                            linepos = pos
                             for i in range(len(translist)):
-                                if orilist[i]==translist[i]:
-                                    linepos+=len(orilist[i])+1
+                                if orilist[i] == translist[i]:
+                                    linepos += len(orilist[i]) + 1
                                 else:
-                                    lineidx=0
+                                    lineidx = 0
                                     for j in range(len(orilist[i])):
                                         if orilist[i][j].strip():
                                             lineidx = j
                                             break
-                                    i18n['typeB']['TypeBOutputText'].append({"pos":linepos+lineidx+emojiDiffIdx,"f":orilist[i].strip(),"t":translist[i].strip().replace("▲","\\n"),"fileName":passagename+".js","js":True})
-                                    linepos+=len(orilist[i])+1
+                                    i18n['typeB']['TypeBOutputText'].append({
+                                        "pos": linepos + lineidx + emojiDiffIdx,
+                                        "f": orilist[i].strip(),
+                                        "t": translist[i].strip().replace("▲","\\n"),
+                                        "fileName": passagename + ".js",
+                                        "js": True
+                                    })
+                                    linepos += len(orilist[i]) + 1
                                 for char in orilist[i]:
                                     if emoji.is_emoji(char):
                                         emojiDiffIdx += 1
-                            # i18n['typeB']['TypeBOutputText'].append({"pos":passageStartpos+fetch_data[d['key']]['position']+emojiDiffIdx,"f":d['original'],"t":d['translation'],"fileName":passagename+".js","js":True})
-                            # for char in fetch_data[d['key']]['text']:
-                            #     if emoji.is_emoji(char):
-                            #         emojiDiffIdx += 1
+
         with open(self.translatedPath/"i18n.json",encoding="utf-8",mode="w") as fp:
             fp.write(json.dumps(i18n,ensure_ascii=False))

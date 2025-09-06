@@ -75,7 +75,8 @@ def generate_fingerprint(text, max_length=40):
     # 4. 回退策略 2：短哈希
     if not fingerprint:
         # 使用原有的 generate_hash 函数
-        return f"hash_{generate_hash(text)[:8]}"
+        # return f"hash_{generate_hash(text)[:8]}"
+        return None
         
     return fingerprint
 
@@ -100,6 +101,7 @@ class TweeParser:
         self.current_column = 0
         self.in_js_block = False
         self.passage_keys_count = {}
+        self.passage_body_start_index = 0
 
     def parse(self, content):
         logger.info("开始解析文件")
@@ -111,6 +113,7 @@ class TweeParser:
         self.tempIndex = 0
         self.IDindex = 0
         self.passage = ""
+        self.passage_body_start_index = 0
 
         while self.index < self.length:
             self.parse_element()
@@ -168,6 +171,13 @@ class TweeParser:
             self.IDindex = 0
             self.passage_keys_count = {}
         self.extracted_texts_push("passage_name",passage_name,self.index-len(passage_name))
+        # 设置该段落内容区域的起始位置（跳过换行）
+        start = self.index
+        if self.peek(0) == "\r" and self.peek(1) == "\n":
+            start += 2
+        elif self.peek(0) == "\n":
+            start += 1
+        self.passage_body_start_index = start
         # logger.info(f"解析到段落名: {passage_name}")
 
     def parse_link(self):
@@ -345,6 +355,7 @@ class TweeParser:
         else:
             # 使用我们定义的函数生成指纹
             fingerprint = generate_fingerprint(text)
+        if not fingerprint:return
         base_key = f"{passage_prefix}_{fingerprint}"
         # 冲突解决
         if base_key in self.passage_keys_count:
@@ -365,6 +376,22 @@ class TweeParser:
         if not context:
             for i in range(contextStat,len(self.extracted_texts)):
                 context += self.extracted_texts[i]['text']
+        else:
+            # 清理已有的尾部 <<POS:...>> 标记，避免重复（例如嵌入 JS 的 context 已经带了文件内位置）
+            context = re.sub(r'(?:\s*(?:\r?\n)*)?(?:<<POS:\d+>>\s*)+$', '', context)
+
+        # 在 context 末尾追加 passage 内相对位置标记
+        if type != "passage_name":
+            offset_in_text = 0
+            for _i, ch in enumerate(text):
+                if ch.strip():
+                    offset_in_text = _i
+                    break
+            rel_pos = position + offset_in_text - self.passage_body_start_index
+            if rel_pos < 0:
+                rel_pos = 0
+            context += f"\n\n<<POS:{rel_pos}>>"
+
         if self.content[position]!=text[0]:
             print(type,text,position,self.content[position-5:position+5])
             a+1

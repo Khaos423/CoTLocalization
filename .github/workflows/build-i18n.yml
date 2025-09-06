@@ -1,0 +1,47 @@
+name: Build i18n
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      PARATRANZ_TOKEN: ${{ secrets.PARATRANZ_TOKEN }}
+      PYTHONIOENCODING: utf-8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install loguru ujson emoji httpx python-dotenv
+
+      - name: Build i18n (auto detect version from Paratranz export)
+        run: |
+          python build.py
+
+      - name: Detect built version
+        shell: pwsh
+        run: |
+          $dir = "translated_source"
+          if (!(Test-Path $dir)) { throw "translated_source not found" }
+          $ver = Get-ChildItem -Path $dir -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty Name
+          echo "I18N_VERSION=$ver" >> $env:GITHUB_ENV
+          Write-Host "Detected version: $ver"
+
+      - name: Upload i18n.json artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: i18n-${{ env.I18N_VERSION }}
+          path: translated_source\${{ env.I18N_VERSION }}\i18n.json
+          if-no-files-found: error
