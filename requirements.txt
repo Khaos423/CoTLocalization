@@ -1,0 +1,5 @@
+ujson
+emoji
+httpx
+loguru
+python-dotenv
