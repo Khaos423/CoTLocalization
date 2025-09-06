@@ -1,16 +1,18 @@
-name: Build i18n
+name: Build i18n and Package ModI18N
 
 on:
   workflow_dispatch: {}
 
 jobs:
-  build:
+  build_i18n:
     runs-on: windows-latest
     permissions:
       contents: read
     env:
       PARATRANZ_TOKEN: ${{ secrets.PARATRANZ_TOKEN }}
       PYTHONIOENCODING: utf-8
+    outputs:
+      i18n_version: ${{ steps.detect.outputs.i18n_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,20 +33,35 @@ jobs:
           python build.py
 
       - name: Detect built version
+        id: detect
         shell: pwsh
         run: |
           $dir = "translated_source"
           if (!(Test-Path $dir)) { throw "translated_source not found" }
           $ver = Get-ChildItem -Path $dir -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty Name
-          echo "I18N_VERSION=$ver" >> $env:GITHUB_ENV
-          Write-Host "Detected version: $ver"
+          echo "i18n_version=$ver" >> $env:GITHUB_OUTPUT
+          Write-Host "Detected i18n version: $ver"
 
       - name: Upload i18n.json artifact
         uses: actions/upload-artifact@v4
         with:
-          name: i18n-${{ env.I18N_VERSION }}
-          path: translated_source\${{ env.I18N_VERSION }}\i18n.json
+          name: i18n-${{ steps.detect.outputs.i18n_version }}
+          path: translated_source\${{ steps.detect.outputs.i18n_version }}\i18n.json
           if-no-files-found: error
+
+  package_mod:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    needs: build_i18n
+    env:
+      I18N_VERSION: ${{ needs.build_i18n.outputs.i18n_version }}
+    steps:
+      - name: Download built i18n.json
+        uses: actions/download-artifact@v4
+        with:
+          name: i18n-${{ env.I18N_VERSION }}
+          path: i18n-src
 
       - name: Download latest ModI18N release zip
         uses: robinraju/release-downloader@v1.10
@@ -53,7 +70,6 @@ jobs:
           latest: true
           fileName: "ModI18N*.zip"
           out-file-path: mod-src
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prepare Mod workspace and version values
         shell: pwsh
@@ -65,8 +81,10 @@ jobs:
           # Expect asset name like: ModI18N-0.7.1-c.zip
           $verWithLetter = $name -replace '^ModI18N-',''
           $numericVer = $verWithLetter -replace '-[a-zA-Z]$',''
+          $letter = ($verWithLetter -replace '.*-','')
           echo "MOD_VER_WITH_LETTER=$verWithLetter" >> $env:GITHUB_ENV
           echo "MOD_VER_NUMERIC=$numericVer" >> $env:GITHUB_ENV
+          echo "MOD_VER_LETTER=$letter" >> $env:GITHUB_ENV
           $displayVer = "v$numericVer-chs-0.0.0"
           echo "MOD_VER_DISPLAY=$displayVer" >> $env:GITHUB_ENV
           Write-Host "Asset: $($asset.Name)"
@@ -80,12 +98,11 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path "mod-work" -Force | Out-Null
           Expand-Archive -Path "${{ env.MOD_ZIP }}" -DestinationPath "mod-work" -Force
-          Write-Host "Extracted to mod-work"
 
       - name: Replace i18n.json
         shell: pwsh
         run: |
-          $src = "translated_source\${{ env.I18N_VERSION }}\i18n.json"
+          $src = "i18n-src\i18n.json"
           if (!(Test-Path $src)) { throw "Built i18n.json not found at $src" }
           $targets = Get-ChildItem -Path "mod-work" -Filter "i18n.json" -Recurse
           if (!$targets) { throw "No i18n.json found inside ModI18N zip" }
@@ -100,11 +117,12 @@ jobs:
           $boot = Get-ChildItem -Path "mod-work" -Filter "boot.json" -Recurse | Select-Object -First 1
           if (-not $boot) { throw "boot.json not found in extracted ModI18N" }
           $content = Get-Content -LiteralPath $boot.FullName -Raw
-          # 1) "version": "=xxxx" -> "={MOD_VER_WITH_LETTER}"
-          $content = [regex]::Replace($content, '("version"\s*:\s*")=([^"]*)(")', { param($m) $m.Groups[1].Value + "=${{ env.MOD_VER_WITH_LETTER }}" + $m.Groups[3].Value })
-          # 2) "version": "..." (not starting with '=') -> v{numeric}-chs-0.0.0
+          $verLetter = "${{ env.MOD_VER_WITH_LETTER }}"
           $display = "${{ env.MOD_VER_DISPLAY }}"
-          $content = [regex]::Replace($content, '("version"\s*:\s*")(?!\=)[^"]*(")', { param($m) $m.Groups[1].Value + $display + $m.Groups[2].Value })
+          # Replace the "=xxxx" version
+          $content = [regex]::Replace($content, '("version"\s*:\s*")=([^"]*)(")', { param($m) $m.Groups[1].Value + "=$verLetter" + $m.Groups[3].Value })
+          # Replace the "v..." version with display version
+          $content = [regex]::Replace($content, '("version"\s*:\s*")v[^"]*(")', { param($m) $m.Groups[1].Value + $display + $m.Groups[2].Value })
           Set-Content -LiteralPath $boot.FullName -Value $content -Encoding utf8
           Write-Host "Patched: $($boot.FullName)"
 
@@ -114,25 +132,25 @@ jobs:
           choco install 7zip -y
           $env:Path += ";C:\Program Files\7-Zip"
           7z i | Out-Null
-          Write-Host "7-Zip installed"
 
-      - name: Repack ModI18N zip (Deflate, level 6)
+      - name: Repack ModI18N zip (Deflate, level 6) with versioned name
         shell: pwsh
         run: |
           $outDir = "dist"
           New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-          $assetName = [System.IO.Path]::GetFileName("${{ env.MOD_ZIP }}")
-          $outZip = Join-Path $outDir $assetName
+          $finalName = "ModI18N-$($env:MOD_VER_WITH_LETTER).zip"
+          $outZip = Join-Path $outDir $finalName
           if (Test-Path $outZip) { Remove-Item $outZip -Force }
           Push-Location "mod-work"
           & 7z a -tzip -mx=6 -mm=Deflate -r "..\$outZip" * | Write-Output
           Pop-Location
           echo "MOD_OUT_ZIP=$outZip" >> $env:GITHUB_ENV
+          echo "MOD_FINAL_NAME=$finalName" >> $env:GITHUB_ENV
           Write-Host "Created: $outZip"
 
       - name: Upload ModI18N zip artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ModI18N-${{ env.I18N_VERSION }}
+          name: ModI18N-${{ env.MOD_VER_WITH_LETTER }}
           path: ${{ env.MOD_OUT_ZIP }}
           if-no-files-found: error
