@@ -125,7 +125,7 @@ jobs:
           $display = $env:PKG_VER_DISPLAY
 
           # Replace the '=...' variant
-          $content = [regex]::Replace($content, '("version"\s*:\s*")=([^"]*)(")', { param($m) $m.Groups[1].Value + "=" + $verLetter + $m.Groups[3].Value })
+          $content = [regex]::Replace($content, '("version"\s*:\s*")=([^"]*)(")', { param($m) $m.Groups[1].Value + "=" + $verLetter + "-" + $m.Groups[3].Value })
 
           # Replace the 'v...' variant (not starting with '=')
           $content = [regex]::Replace($content, '("version"\s*:\s*")v[^"]*(")', { param($m) $m.Groups[1].Value + $display + $m.Groups[2].Value })
