@@ -181,14 +181,19 @@ class Replacer:
                 for d in pzdata:
                     if '过时' in d.get('original', ''):
                         continue
-                    base_name = d['key'].rsplit("_", 1)[0]
-                    filename = base_name + (".js" if is_js_root else ".twee")
+                    if is_js_root:
+                        # JS：统一按当前物理文件聚合，避免同一文件内被拆为多个组导致 emojiDiffIdx 反复清零
+                        filename = file.replace(".json", ".js")
+                    else:
+                        # Twee：严格按 Passage 名称聚合（不携带 fingerprint/冲突后缀），保证整段落一次累加
+                        passage = d['key'].split("_")[0]
+                        filename = passage + ".twee"
                     file_trans.setdefault(filename, []).append(d)
 
                 for filename, entries in file_trans.items():
                     emojiDiffIdx = 0
                     if is_js_root:
-                        passagename = filename.replace(".js","")
+                        passagename = file.replace(".json","")
                     else:
                         # 取首条的 key 推导段落名
                         passagename = entries[0]['key'].split("_")[0]
@@ -226,6 +231,7 @@ class Replacer:
 
                             orilist = re.split(r'(?<!\\)\n', d['original'])
                             translist = re.split(r'(?<!\\)\n', d['translation'])
+                            if 'StreamingWidgets' in passagename:print(pos,emojiDiffIdx)
                             if len(orilist) != len(translist):
                                 logger.error(f"{d['key']} \\n error!")
                                 i18n['typeB']['TypeBInputStoryScript'].append({
@@ -241,7 +247,7 @@ class Replacer:
 
                             linepos = pos
                             for i in range(len(translist)):
-                                if orilist[i] == translist[i]:
+                                if orilist[i].strip() == translist[i].strip():
                                     linepos += len(orilist[i]) + 1
                                 else:
                                     lineidx = 0
@@ -256,9 +262,8 @@ class Replacer:
                                         "t": translist[i].strip()
                                     })
                                     linepos += len(orilist[i]) + 1
-                                for char in orilist[i]:
-                                    if emoji.is_emoji(char):
-                                        emojiDiffIdx += 1
+                                emojiDiffIdx += len(emoji.emoji_list(orilist[i]))
+                                if 'StreamingWidgets' in passagename:print(pos,emojiDiffIdx)
                         else:
                             # JS：POS 为文件内绝对位置
                             d['original'] = d['original'].replace("\\n","\n")
@@ -282,7 +287,7 @@ class Replacer:
 
                             linepos = pos
                             for i in range(len(translist)):
-                                if orilist[i] == translist[i]:
+                                if orilist[i].strip() == translist[i].strip():
                                     linepos += len(orilist[i]) + 1
                                 else:
                                     lineidx = 0
@@ -298,9 +303,7 @@ class Replacer:
                                         "js": True
                                     })
                                     linepos += len(orilist[i]) + 1
-                                for char in orilist[i]:
-                                    if emoji.is_emoji(char):
-                                        emojiDiffIdx += 1
+                                emojiDiffIdx += len(emoji.emoji_list(orilist[i]))
 
         with open(self.translatedPath/"i18n.json",encoding="utf-8",mode="w") as fp:
             fp.write(json.dumps(i18n,ensure_ascii=False))
