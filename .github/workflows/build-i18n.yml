@@ -2,6 +2,8 @@ name: Build i18n and Package ModI18N
 
 on:
   workflow_dispatch: {}
+  schedule:
+    - cron: '0 23 * * *'  # 每天北京时间 07:00 触发（UTC 23:00）
 
 jobs:
   build_i18n:
@@ -148,8 +150,30 @@ jobs:
           $finalName = "ModI18N-$($env:I18N_VERSION).zip"
           $outZip = Join-Path $outDir $finalName
           if (Test-Path $outZip) { Remove-Item $outZip -Force }
-          Push-Location "mod-work"
-          & 7z a -tzip -mx=6 -mm=Deflate -r "..\$outZip" * | Write-Output
+
+          # Normalize internal root folder to ModI18N-$I18N_VERSION and flatten original root if needed
+          $stage = "stage"
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          $rootName = "ModI18N-$($env:I18N_VERSION)"
+          $rootDir = Join-Path $stage $rootName
+          New-Item -ItemType Directory -Path $rootDir -Force | Out-Null
+
+          $items = Get-ChildItem -LiteralPath "mod-work" -Force
+          $dirs = $items | Where-Object { $_.PSIsContainer }
+          if ($dirs.Count -eq 1 -and ($items.Count -eq 1)) {
+            # Single root dir: move its children into $rootDir (flatten)
+            Get-ChildItem -LiteralPath $dirs[0].FullName -Force | ForEach-Object {
+              Move-Item -LiteralPath $_.FullName -Destination $rootDir -Force
+            }
+          } else {
+            # Multiple items: move them directly
+            $items | ForEach-Object {
+              Move-Item -LiteralPath $_.FullName -Destination $rootDir -Force
+            }
+          }
+
+          Push-Location $stage
+          & 7z a -tzip -mx=6 -mm=Deflate -r "..\$outZip" "$rootName" | Write-Output
           Pop-Location
           echo "MOD_OUT_ZIP=$outZip" >> $env:GITHUB_ENV
           echo "MOD_FINAL_NAME=$finalName" >> $env:GITHUB_ENV

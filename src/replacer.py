@@ -191,7 +191,7 @@ class Replacer:
                         passagename = filename.replace(".js","")
                     else:
                         # 取首条的 key 推导段落名
-                        passagename = entries[0]['key'].rsplit("_", 1)[0]
+                        passagename = entries[0]['key'].split("_")[0]
 
                     # 位置排序（缺失 POS 的放最后）
                     entries.sort(key=lambda x: (parse_pos_from_context(x.get('context','')) if parse_pos_from_context(x.get('context','')) is not None else 10**12))
