@@ -777,7 +777,7 @@ class JSParserV2:
             # 清理已有的尾部 <<POS:...>> 标记，避免嵌套重复
             context = re.sub(r'(?:\s*(?:\r?\n)*)?(?:<<POS:\d+>>\s*)+$', '', context)
         
-        context += f"\n\n<<POS:{final_position}>>"
+        context = f"<<POS:{final_position}>>\n\n" + context
         
         if self.content[position]!=text[0]:
             print(type,[text],position,[self.content])

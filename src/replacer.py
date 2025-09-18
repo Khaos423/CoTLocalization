@@ -263,7 +263,6 @@ class Replacer:
                                     })
                                     linepos += len(orilist[i]) + 1
                                 emojiDiffIdx += len(emoji.emoji_list(orilist[i]))
-                                if 'StreamingWidgets' in passagename:print(pos,emojiDiffIdx)
                         else:
                             # JS：POS 为文件内绝对位置
                             d['original'] = d['original'].replace("\\n","\n")

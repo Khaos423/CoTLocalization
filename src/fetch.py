@@ -280,7 +280,7 @@ class Fetcher:
                 for d in filedata:
                     key = d
                     d = filedata[d]
-                    if ('type' in d and d['type'] in "passage_name") or (not isinstance(d['id'],int) and d['id'].endswith("_0")):continue
+                    if ('type' in d and d['type'] in "passage_name") or (not isinstance(d['id'],int) and d['id'].endswith("_0") and "js" in root):continue
                     if 'stage' in d and d['stage'] == 9:
                         pzdata.append({
                             "key":key if ("Passages" in root) or ("Widgets" in root) or ("_" in key) else f"{file.replace('.json','')}_{d['id']}",
@@ -488,11 +488,6 @@ class Fetcher:
         os.makedirs(DIR_FETCH/version2/"Passages", exist_ok=True)
         os.makedirs(DIR_FETCH/version2/"js", exist_ok=True)
         os.makedirs(DIR_FETCH/version2/"Widgets", exist_ok=True)
-        try:
-            with open(self.fetchPath/"hash_dict.json", "r", encoding="utf-8") as fp:
-                hash_dict = json.loads(fp.read())
-        except:
-            hash_dict = {}
 
         def compare_directories_by_key(dir1, dir2):
             comparison = filecmp.dircmp(dir1, dir2)
@@ -559,23 +554,6 @@ class Fetcher:
                 out_path = DIR_FETCH/version2/dir/name.replace(".js",".json").replace(".twee",".json")
                 with open(out_path, "w", encoding="utf-8") as fp:
                     fp.write(json.dumps(newfetch, ensure_ascii=False))
-
-                # 同步写入 hash_dict（仅保留以兼容下游流程；比较逻辑不再依赖hash）
-                try:
-                    hash_dict[name] = {}
-                    for k in newfetch:
-                        d = newfetch[k]
-                        if name.endswith(".js"):
-                            rid = f"{name.replace('.js','')}_{d['id']}"
-                        else:
-                            rid = d['id']
-                        hash_dict[name][d['hash']] = {"id": rid, "position": d['position']}
-                except Exception as e:
-                    logger.error(f"更新hash_dict失败: {name} - {str(e)}")
-
-            # 写出新的 hash_dict（兼容性用途）
-            with open(DIR_FETCH/version2/"hash_dict.json", "w", encoding="utf-8") as fp:
-                fp.write(json.dumps(hash_dict, ensure_ascii=False))
 
         # 三类目录逐一对比
         compare_directories_by_key(self.margeSourcePath/'Passages', DIR_MARGE_SOURCE/version2/'Passages')
