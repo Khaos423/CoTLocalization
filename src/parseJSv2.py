@@ -415,15 +415,6 @@ class JSParserV2:
 
         # --- 内部辅助函数定义结束 ---
 
-        # 准备工作：计算上下文
-        # 复现原始逻辑: context[:context.find(text[:10]) if text[:10] in context else 0]
-        prefix = text[:10]
-        if prefix in context:
-            context_before_position = context[:context.find(prefix)]
-        else:
-            # 如果不在上下文中，或者 text 为空，则取空字符串 (context[:0])
-            context_before_position = ""
-
         text_stripped = text.strip()
 
         # 规则集 1: array-object (数组中的对象)
@@ -580,21 +571,6 @@ class JSParserV2:
                         clean_value = _clean_key(prop_value, max_length=15)
                         logger.debug(f"找到属性值: {prop_name}_{clean_value}")
                         return f"prop_{prop_name}_{clean_value}"
-
-        # 规则集 4: 变量赋值 (通过上下文推断)
-        # 替代 re.search(r'(\w+)\s*=\s*$', context_before_position)
-        if context_before_position:
-            context_stripped = context_before_position.rstrip()
-            if context_stripped.endswith('='):
-                # 提取等号前的单词
-                # 注意：原始正则是 (\w+)，不包含点号，所以我们向前提取一个单词即可
-                # 使用 _get_word_before 并取最后一部分可以模拟这个行为
-                before_equal = context_stripped[:-1].rstrip()
-                if before_equal:
-                    var_name = before_equal
-                    if var_name:
-                        logger.debug(f"找到等号前变量名: {var_name}")
-                        return f"var_{var_name}"
 
         # 规则集 5: 函数定义
         if text_type == 'function':
@@ -777,7 +753,8 @@ class JSParserV2:
             # 清理已有的尾部 <<POS:...>> 标记，避免嵌套重复
             context = re.sub(r'(?:\s*(?:\r?\n)*)?(?:<<POS:\d+>>\s*)+$', '', context)
         
-        context = f"<<POS:{final_position}>>\n\n" + context
+        # 将position格式化为8位数字，前面补零，例如：123 -> 00000123
+        context = f"<<POS:{final_position:08d}>>\n\n" + context
         
         if self.content[position]!=text[0]:
             print(type,[text],position,[self.content])

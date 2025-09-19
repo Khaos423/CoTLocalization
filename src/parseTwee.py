@@ -390,7 +390,7 @@ class TweeParser:
             rel_pos = position + offset_in_text - self.passage_body_start_index
             if rel_pos < 0:
                 rel_pos = 0
-            context = f"<<POS:{rel_pos}>>\n\n" + context
+            context = f"{self.passage}{rel_pos}\n<<POS:{rel_pos:08d}>>\n\n" + context
 
         if self.content[position]!=text[0]:
             print(type,text,position,self.content[position-5:position+5])
