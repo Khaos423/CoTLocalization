@@ -1,17 +1,8 @@
 import re
 import ujson as json
 from .log import logger
-from .parseJS4Twee import JSTextExtractor
 from .parseJSv2 import JSParserV2
-import hashlib
-
-def generate_hash(text):
-    # 使用 SHA-256 算法
-    hash_object = hashlib.md5(text.encode('utf-8'))
-    return hash_object.hexdigest()
-
 import re
-import hashlib
 # ... 其他导入 ...
 
 def sanitize_key_part(text):
@@ -83,19 +74,6 @@ def generate_fingerprint(text, max_length=40):
 DEBUG = False
 class TweeParser:
     def __init__(self):
-        self.tokens = {
-            'PASSAGE_START': r'::',
-            'LINK': r'\[\[',
-            'LINK_END': r'\]\]',
-            'MACRO_START': r'<<',
-            'MACRO_END': r'>>',
-            'VARIABLE': r'\$',
-            'NEWLINE': r'\n',
-            'HTML_TAG_START': r'<',
-            'HTML_TAG_END': r'>',
-            'JS_START': r'<<script>>',
-            'JS_END': r'<</script>>'
-        }
         self.extracted_texts = []
         self.current_line = 1
         self.current_column = 0
@@ -103,7 +81,7 @@ class TweeParser:
         self.passage_keys_count = {}
         self.passage_body_start_index = 0
 
-    def parse(self, content):
+    def parse(self, content, passage_name=""):
         logger.info("开始解析文件")
         self.content = content
         self.index = 0
@@ -112,7 +90,7 @@ class TweeParser:
         self.tempText = ""
         self.tempIndex = 0
         self.IDindex = 0
-        self.passage = ""
+        self.passage = passage_name
         self.passage_body_start_index = 0
 
         while self.index < self.length:
@@ -204,32 +182,182 @@ class TweeParser:
             if parts:
                 command = parts[0].lower()
 
-        # 定义需要跳过的 if 相关命令列表 (Twee也常使用 elseif)
-        # if_related_commands = ["if", "else", "elif", "elseif"]
-        # is_if_related = command in if_related_commands
-        is_if_related = False
+        # 检查是否为容器宏
+        if not content.startswith('/') and command:  # 不是闭合标签且有命令名
+            is_container = self.is_container_macro(command)
+            if is_container:
+                # 提取整个容器内容
+                container_content = self.extract_container_content(macro_content, zeroIndex)
+                if container_content:
+                    if self.tempText.strip() != "":
+                        self.extracted_texts_push("text", self.tempText.strip(), self.tempIndex)
+                        self.tempIndex = 0
+                        self.tempText = ""
+                    
+                    # 检查容器内容行数，决定处理方式
+                    line_count = container_content.count('\n')
+                    if line_count > 10:
+                        if DEBUG:logger.info(f"容器内容行数 {line_count} > 10，开始递归解析")
+                        self.parse_container_recursively(container_content, zeroIndex)
+                    else:
+                        # 行数不超过10，作为整体添加
+                        self.extracted_texts_push("container", container_content, zeroIndex)
+                    return
 
-        check_token = lambda s, *keywords: any(keyword in s for keyword in keywords)
-        if check_token("<<"+macro_content,"<<if","<<elif","<<else","<<for") and self.peek(2)=="\n":
-            if self.tempText.strip()!="" :
-                self.extracted_texts_push("text",self.tempText.strip(),self.tempIndex)
-                self.tempIndex = 0
-                self.tempText = ""
-            # if re.search(r'(?<!\[)["\'](.+?)["\'](?!\])',macro_content):
-            # self.extracted_texts_push("Macro",f"<<{macro_content}>>",self.index-len(macro_content)-2)
-            self.consume(2)  # Consume '>>'
-            if not is_if_related:
-                self.tempText += f"<<{macro_content}>>"
-                if self.tempIndex==0:self.tempIndex=zeroIndex
-                if DEBUG:logger.info(f"解析到宏: {macro_content}")
-        else:
-            if is_if_related:
-                self.consume(2) # Consume '>>'
-                if DEBUG:logger.info(f"解析并跳过内联IF宏: {macro_content}")
+        self.index = zeroIndex
+        self.parse_text("macro")
+
+    def is_container_macro(self, command):
+        """判断宏是否为容器类型（通过检查是否存在对应的闭合标签）"""
+        if not command:
+            return False
+        
+        # 在剩余的文件内容中查找对应的闭合标签
+        remaining_content = self.content[self.index + 2:]  # +2 是为了跳过当前的 '>>'
+        closing_tag = f"<</{command}>>"
+        
+        return closing_tag in remaining_content
+
+    def extract_container_content(self, macro_content, start_index):
+        """提取整个容器内容，处理嵌套问题"""
+        content = macro_content.strip()
+        if not content:
+            return None
+        
+        # 获取宏的第一个词作为命令名
+        parts = content.split()
+        if not parts:
+            return None
+        
+        command = parts[0].lower()
+        opening_tag = f"<<{command}"
+        closing_tag = f"<</{command}>>"
+        
+        # 消费当前的 '>>'
+        self.consume(2)
+        
+        # 从当前位置开始查找匹配的闭合标签
+        container_start = start_index
+        current_pos = self.index
+        nesting_level = 1  # 当前嵌套层级，从1开始（因为我们已经遇到了开始标签）
+        
+        while current_pos < self.length and nesting_level > 0:
+            # 查找下一个相关标签
+            next_opening = self.content.find(opening_tag, current_pos)
+            next_closing = self.content.find(closing_tag, current_pos)
+            
+            # 如果没有找到闭合标签，说明容器不完整
+            if next_closing == -1:
+                if DEBUG:logger.warning(f"未找到匹配的闭合标签: {closing_tag}")
+                return None
+            
+            # 如果开始标签在闭合标签之前，说明有嵌套
+            if next_opening != -1 and next_opening < next_closing:
+                # 确保这是一个完整的开始标签（后面跟着空格或>>）
+                tag_end_pos = next_opening + len(opening_tag)
+                if (tag_end_pos < self.length and
+                    (self.content[tag_end_pos] in [' ', '>'] or
+                     self.content[tag_end_pos:tag_end_pos+2] == '>>')):
+                    nesting_level += 1
+                    current_pos = tag_end_pos
+                else:
+                    current_pos = next_opening + 1
             else:
-                # 原始逻辑：其他内联宏（如 <<link>>, <<bathroom>>）视为文本的一部分
-                self.index = zeroIndex
-                self.parse_text("macro")
+                # 找到了匹配的闭合标签
+                nesting_level -= 1
+                if nesting_level == 0:
+                    # 找到了同级的闭合标签
+                    container_end = next_closing + len(closing_tag)
+                    container_content = self.content[container_start:container_end]
+                    
+                    # 更新解析位置到容器结束位置
+                    self.index = container_end
+                    
+                    logger.info(f"提取到容器: {command}, 长度: {len(container_content)}")
+                    return container_content
+                else:
+                    current_pos = next_closing + len(closing_tag)
+        
+        # 如果循环结束但嵌套层级不为0，说明容器不完整
+        logger.warning(f"容器不完整，嵌套层级: {nesting_level}")
+        return None
+
+    def parse_container_recursively(self, container_content, container_start_pos):
+        """递归解析容器内容"""
+        if DEBUG:logger.info(f"开始递归解析容器内容，长度: {len(container_content)}")
+        
+        # 提取容器内部的内容（去掉开始和结束标签）
+        inner_content = self.extract_inner_content(container_content)
+        if not inner_content:
+            if DEBUG:logger.info("容器内部内容为空，跳过递归解析")
+            # 回退：直接把整个容器作为一条消息输出，避免首尾被丢弃
+            self.extracted_texts_push("container", container_content, container_start_pos)
+            return
+        
+        # 计算开头与结尾标签
+        start_tag_end_idx = container_content.find('>>')
+        end_tag_start_idx = container_content.rfind('<</')
+        start_tag = container_content[:start_tag_end_idx+2] if start_tag_end_idx != -1 else ""
+        end_tag = container_content[end_tag_start_idx:] if end_tag_start_idx != -1 else ""
+
+        # 创建新的TweeParser实例来解析容器内部内容
+        parser = TweeParser()
+        parser.passage_body_start_index = 0  # 重新设置为0，因为这是新的内容片段
+        parser.parse(inner_content,passage_name=sanitize_key_part(start_tag))
+        logger.info(f"递归解析完成，提取了 {len(parser.extracted_texts)} 个文本项")
+
+        # 容器内部内容相对于原始文件的起始位置（即开标签后）
+        start_tag_end = start_tag_end_idx + 2 if start_tag_end_idx != -1 else 0
+
+        extracted = parser.extracted_texts
+        if not extracted:
+            # 回退：如果内部没有任何可提取项，仍然输出整个容器
+            self.extracted_texts_push("container", container_content, container_start_pos)
+            return
+
+        # 将递归解析的结果添加到当前解析器的结果中，调整位置偏移，并把首尾标签拼接到首/尾条目
+        for i, p in enumerate(extracted):
+            # 默认位置（保持原逻辑）
+            adjusted_position = p['position'] + container_start_pos + start_tag_end
+            new_text = p['text']
+            new_position = adjusted_position
+
+            if i == 0:
+                # 在第一条前拼接容器开头，以及开标签与第一条文本之间的所有原始内容
+                prefix_between = inner_content[:p['position']]
+                new_text = f"{start_tag}{prefix_between}{p['text']}"
+                new_position = container_start_pos
+
+            if i == len(extracted) - 1:
+                # 在最后一条后拼接从该条结尾到闭合标签之间的所有原始内容与闭合标签
+                end_in_inner = p['position'] + len(p['text'])
+                suffix_between = inner_content[end_in_inner:]
+                if i == 0:
+                    # 只有一条的情况：同时拼接首与尾
+                    new_text = f"{start_tag}{inner_content[:p['position']]}{p['text']}{suffix_between}{end_tag}"
+                    new_position = container_start_pos
+                else:
+                    new_text = f"{p['text']}{suffix_between}{end_tag}"
+
+            self.extracted_texts_push(p['type'], new_text, new_position, p['context'])
+
+    def extract_inner_content(self, container_content):
+        """从完整的容器内容中提取内部内容（去掉开始和结束标签）"""
+        # 找到第一个 >> 的位置（开始标签结束）
+        start_tag_end = container_content.find('>>')
+        if start_tag_end == -1:
+            return None
+        
+        # 找到最后一个 <</ 的位置（结束标签开始）
+        end_tag_start = container_content.rfind('<</')
+        if end_tag_start == -1:
+            return None
+        
+        # 提取中间的内容，不要strip()，保持原始格式
+        inner_start = start_tag_end + 2
+        inner_content = container_content[inner_start:end_tag_start]
+        
+        return inner_content
 
     def parse_html_tag(self):
         # logger.debug(f"开始解析HTML标签 at 行 {self.current_line}, 列 {self.current_column}")
@@ -345,7 +473,7 @@ class TweeParser:
             self.current_column += 1
             self.index += 1
         return self.content[start:self.index]
-    def extracted_texts_push(self,type,text,position,context=""):
+    def extracted_texts_push(self,type,text,position,context="",id=""):
         if not text.strip():return
         # --- 新的稳定 Key 生成逻辑 ---
         # 确保Passage名称也被规范化
@@ -372,13 +500,14 @@ class TweeParser:
             self.passage_keys_count[base_key] = 1
             unique_id = base_key
 
-        contextStat = max(0,len(self.extracted_texts)-3)
-        if not context:
-            for i in range(contextStat,len(self.extracted_texts)):
-                context += self.extracted_texts[i]['text']
-        else:
-            # 清理已有的尾部 <<POS:...>> 标记，避免重复（例如嵌入 JS 的 context 已经带了文件内位置）
-            context = re.sub(r'(?:<<POS:\d+>>\s*)', '', context)
+        # contextStat = max(0,len(self.extracted_texts)-3)
+        # if not context:
+        #     for i in range(contextStat,len(self.extracted_texts)):
+        #         context += self.extracted_texts[i]['text']
+        # else:
+        #     # 清理已有的尾部 <<POS:...>> 标记，避免重复（例如嵌入 JS 的 context 已经带了文件内位置）
+        #     context = re.sub(r'(?:<<POS:\d+>>\s*)', '', context)
+        context = ""
 
         # 在 context 末尾追加 passage 内相对位置标记
         if type != "passage_name":
@@ -390,10 +519,10 @@ class TweeParser:
             rel_pos = position + offset_in_text - self.passage_body_start_index
             if rel_pos < 0:
                 rel_pos = 0
-            context = f"{self.passage}{rel_pos}\n<<POS:{rel_pos:08d}>>\n\n" + context
+            context = f"{self.passage}{rel_pos:08d}\n<<POS:{rel_pos:08d}>>" + context
 
         if self.content[position]!=text[0]:
-            print(type,text,position,self.content[position-5:position+5])
+            print(type,text,position,[self.content[position-10:position+10],self.content[position],text[0]])
             a+1
         i=0
         for t in self.extracted_texts:
@@ -405,7 +534,6 @@ class TweeParser:
             'text': text,
             'position': position,
             'context':context,
-            'hash': generate_hash(text) if i==0 else generate_hash(text)+str(i)
         })
         self.IDindex+=1
 
