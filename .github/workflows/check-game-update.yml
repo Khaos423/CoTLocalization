@@ -57,6 +57,7 @@ jobs:
         env:
           GAME_TYPE: ${{ github.event.inputs.game_type || 'ea' }}
           FORCE_UPDATE: ${{ github.event.inputs.force_update || 'false' }}
+          ITCH_API_KEY: ${{ secrets.ITCH_API_KEY }}
         run: |
           python << 'EOF'
           import os
@@ -67,6 +68,7 @@ jobs:
           STABLE_GAME_ID = "2151565"
           EA_GAME_ID = "2499529"
           UPLOADS_URL = "https://api.itch.io/games/{game_id}/uploads"
+          API_KEY = os.environ.get("ITCH_API_KEY", "")
 
           game_type = os.environ.get("GAME_TYPE", "ea")
           force_update = os.environ.get("FORCE_UPDATE", "false").lower() == "true"
@@ -78,7 +80,8 @@ jobs:
 
           # 获取上传列表
           url = UPLOADS_URL.format(game_id=game_id)
-          response = requests.get(url)
+          headers = {"Authorization": API_KEY} if API_KEY else {}
+          response = requests.get(url, headers=headers)
           response.raise_for_status()
           data = response.json()
 

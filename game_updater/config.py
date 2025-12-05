@@ -1,6 +1,9 @@
 import os
 
-# --- Game Config ---
+# --- API and Game Config ---
+# API_KEY可以通过环境变量ITCH_API_KEY设置，或使用默认值
+API_KEY = os.environ.get("ITCH_API_KEY", "")
+
 STABLE_GAME_ID = "2151565"
 EARLY_ACCESS_GAME_ID = "2499529"
 

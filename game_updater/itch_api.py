@@ -1,6 +1,10 @@
 import requests
 from . import config
 
+AUTH_HEADER = {
+    "Authorization": config.API_KEY
+}
+
 
 def get_html_channel_info(game_id, password=None):
     """
@@ -17,7 +21,7 @@ def get_html_channel_info(game_id, password=None):
         params['password'] = password
 
     try:
-        response = requests.get(url, params=params)
+        response = requests.get(url, headers=AUTH_HEADER, params=params)
         response.raise_for_status()
         data = response.json()
 
