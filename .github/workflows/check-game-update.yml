@@ -186,6 +186,7 @@ jobs:
       VERSION: ${{ needs.check_update.outputs.version }}
       UPLOAD_ID: ${{ needs.check_update.outputs.upload_id }}
       BUILD_ID: ${{ needs.check_update.outputs.build_id }}
+      PYTHONIOENCODING: utf-8
     steps:
       - name: Checkout
         uses: actions/checkout@v4
