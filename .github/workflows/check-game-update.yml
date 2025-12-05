@@ -205,6 +205,7 @@ jobs:
         uses: browser-actions/setup-chrome@latest
 
       - name: Download HTML file
+        shell: bash
         run: |
           python << 'EOF'
           import os
@@ -235,6 +236,7 @@ jobs:
           EOF
 
       - name: Export story data
+        shell: bash
         run: |
           python << 'EOF'
           import os
