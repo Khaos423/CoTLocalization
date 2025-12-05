@@ -4,57 +4,52 @@ import os
 import shutil
 from . import config
 
-def download_and_unzip(upload_id, password=None):
-    """使用upload_id下载并解压文件，可选择提供密码"""
-    download_url = config.DOWNLOAD_URL_TEMPLATE.format(id=upload_id)
-    print(f"  - 正在从 {download_url} 下载文件...")
+def download_html(html_url, version):
+    """
+    直接从HTML URL下载HTML文件，并保存到目标目录。
+    
+    参数:
+        html_url: HTML文件的完整URL
+        version: 版本号，用于重命名文件
+    
+    返回:
+        成功时返回HTML文件的目标路径，失败时返回None
+    """
+    print(f"  - 正在从 {html_url} 下载HTML文件...")
     
     # 确保临时目录存在
     os.makedirs(config.TEMP_DIR, exist_ok=True)
-
+    
     try:
-        # 下载文件
-        auth_header = {"Authorization": config.API_KEY,"password":password}
-        with requests.get(download_url+("" if not password else "?password="+password), headers=auth_header, stream=True) as r:
-            r.raise_for_status()
-            with open(config.TEMP_ZIP_PATH, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        print(f"  - 文件已成功下载到 {config.TEMP_ZIP_PATH}")
-
-        # 解压文件
-        if os.path.exists(config.TEMP_EXTRACT_DIR):
-            shutil.rmtree(config.TEMP_EXTRACT_DIR)
-        os.makedirs(config.TEMP_EXTRACT_DIR)
+        # 下载HTML文件
+        response = requests.get(html_url, stream=True)
+        response.raise_for_status()
         
-        print(f"  - 正在解压到 {config.TEMP_EXTRACT_DIR}...")
-        with zipfile.ZipFile(config.TEMP_ZIP_PATH, 'r') as zip_ref:
-            zip_ref.extractall(config.TEMP_EXTRACT_DIR)
-        print("  - 解压完成。")
-        return True
+        # 先保存到临时位置
+        with open(config.TEMP_HTML_PATH, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        print(f"  - HTML文件已下载到临时位置: {config.TEMP_HTML_PATH}")
+        
+        # 构建目标文件名和路径
+        new_filename = f"index{version}.html"
+        destination_path = os.path.join(config.DESTINATION_DIR, new_filename)
+        
+        # 确保目标目录存在
+        os.makedirs(config.DESTINATION_DIR, exist_ok=True)
+        
+        # 移动文件到目标位置
+        shutil.move(config.TEMP_HTML_PATH, destination_path)
+        print(f"  - HTML文件已移动到: {destination_path}")
+        
+        return destination_path
+        
+    except requests.exceptions.RequestException as e:
+        print(f"  - 错误: 下载HTML文件失败: {e}")
+        return None
     except Exception as e:
-        print(f"  - 错误: 下载或解压过程中发生错误: {e}")
-        return False
-
-def find_and_move_html(version):
-    """查找HTML文件，重命名并移动，然后返回新路径"""
-    print("  - 正在查找、重命名并移动HTML文件...")
-    for root, dirs, files in os.walk(config.TEMP_EXTRACT_DIR):
-        for file in files:
-            if file.endswith(".html"):
-                original_html_path = os.path.join(root, file)
-                new_filename = f"{file.replace('.html', '')}{version}.html"
-                destination_path = os.path.join(config.DESTINATION_DIR, new_filename)
-                
-                print(f"  - 找到HTML文件: {original_html_path}")
-                print(f"  - 新文件名: {new_filename}")
-                
-                os.makedirs(config.DESTINATION_DIR, exist_ok=True)
-                shutil.move(original_html_path, destination_path)
-                print(f"  - 文件已成功移动到: {destination_path}")
-                return destination_path
-    print("  - 错误: 在解压的文件夹中未找到HTML文件。")
-    return None
+        print(f"  - 错误: 处理HTML文件时发生错误: {e}")
+        return None
 
 def cleanup_temp_files():
     """清理临时文件和文件夹"""

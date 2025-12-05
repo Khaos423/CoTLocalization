@@ -1,6 +1,7 @@
 from .consts import *
 from .log import logger
 from .parseTwee import TweeParser
+from .parseTweev2 import TweeParserV2
 from .parseJS import JSTextExtractor
 from .parseJSv2 import JSParserV2
 
@@ -121,7 +122,6 @@ class Fetcher:
                     fetchData = {}
                     for d in parser.extracted_texts:
                         fetchData[d['id']] = d
-                    hash_dict[file][d['hash']] = {"id":d['id'],"position":d['position']}
                     with open(root.replace("marge_source","fetch")+"\\"+file.replace('.twee','.json'),encoding="utf-8",mode="w+") as fp:
                         fp.write(json.dumps(fetchData,ensure_ascii=False))
         os.makedirs(self.fetchPath/"Widgets", exist_ok=True)
@@ -140,7 +140,6 @@ class Fetcher:
                     fetchData = {}
                     for d in parser.extracted_texts:
                         fetchData[d['id']] = d
-                        hash_dict[file][d['hash']] = {"id":d['id'],"position":d['position']}
                     with open(root.replace("source","fetch")+"\\"+file.replace('.twee','.json'),encoding="utf-8",mode="w+") as fp:
                         fp.write(json.dumps(fetchData,ensure_ascii=False))
         os.makedirs(self.fetchPath/"js", exist_ok=True)
@@ -159,7 +158,6 @@ class Fetcher:
                     fetchData = {}
                     for d in parser.extracted_texts:
                         fetchData[f"{file.replace('.js','')}_{d['id']}"] = d
-                        hash_dict[file][d['hash']] = {"id":f"{file.replace('.js','')}_{d['id']}","position":d['position']}
                     with open(root.replace("source","fetch")+"\\"+file.replace('.js','.json'),encoding="utf-8",mode="w+") as fp:
                         fp.write(json.dumps(fetchData,ensure_ascii=False))
         with open(self.fetchPath/"hash_dict.json", "w", encoding="utf-8") as fp:

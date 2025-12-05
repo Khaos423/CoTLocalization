@@ -754,7 +754,7 @@ class JSParserV2:
             context = re.sub(r'(?:\s*(?:\r?\n)*)?(?:<<POS:\d+>>\s*)+$', '', context)
         
         # 将position格式化为8位数字，前面补零，例如：123 -> 00000123
-        context = f"<<POS:{final_position:08d}>>\n\n" + context
+        context = f"<<POS:{final_position:08d}>>" + ""
         
         if self.content[position]!=text[0]:
             print(type,[text],position,[self.content])

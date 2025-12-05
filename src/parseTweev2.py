@@ -72,7 +72,7 @@ def generate_fingerprint(text, max_length=40):
     return fingerprint
 
 DEBUG = False
-class TweeParser:
+class TweeParserV2:
     def __init__(self):
         self.extracted_texts = []
         self.current_line = 1
@@ -201,7 +201,10 @@ class TweeParser:
                         self.parse_container_recursively(container_content, zeroIndex)
                     else:
                         # 行数不超过10，作为整体添加
-                        self.extracted_texts_push("container", container_content, zeroIndex)
+                        self.index = zeroIndex+len(container_content)
+                        resttext = self.consume_until("\n")
+                        self.consume()
+                        self.extracted_texts_push("container", container_content+resttext, zeroIndex)
                     return
 
         self.index = zeroIndex
@@ -273,7 +276,7 @@ class TweeParser:
                     # 更新解析位置到容器结束位置
                     self.index = container_end
                     
-                    logger.info(f"提取到容器: {command}, 长度: {len(container_content)}")
+                    # logger.info(f"提取到容器: {command}, 长度: {len(container_content)}")
                     return container_content
                 else:
                     current_pos = next_closing + len(closing_tag)
@@ -301,7 +304,7 @@ class TweeParser:
         end_tag = container_content[end_tag_start_idx:] if end_tag_start_idx != -1 else ""
 
         # 创建新的TweeParser实例来解析容器内部内容
-        parser = TweeParser()
+        parser = TweeParserV2()
         parser.passage_body_start_index = 0  # 重新设置为0，因为这是新的内容片段
         parser.parse(inner_content,passage_name=sanitize_key_part(start_tag))
         logger.info(f"递归解析完成，提取了 {len(parser.extracted_texts)} 个文本项")
@@ -339,7 +342,7 @@ class TweeParser:
                 else:
                     new_text = f"{p['text']}{suffix_between}{end_tag}"
 
-            self.extracted_texts_push(p['type'], new_text, new_position, p['context'])
+            self.extracted_texts_push(p['type'], new_text, new_position, p['context'],id=p['id'])
 
     def extract_inner_content(self, container_content):
         """从完整的容器内容中提取内部内容（去掉开始和结束标签）"""
@@ -385,8 +388,7 @@ class TweeParser:
             self.extracted_texts_push("text",self.tempText.strip(),self.tempIndex)
             self.tempIndex = 0
             self.tempText = ""
-            if (tag_content=="br" and self.peek()=="b" and self.peek(2)=="r" and self.peek(3)==">"):
-                self.index += 4
+            self.index += 4
         else:
             self.tempText += f"<{tag_content}>"
             if self.tempIndex==0:self.tempIndex=zeroIndex
@@ -407,8 +409,8 @@ class TweeParser:
             self.index = zeroIndex
             text = self.consume_while(lambda c: c not in '<' and not (c==':' and self.peek()==":"))
         if type=="macro":
+            if self.tempIndex==0 and self.tempText.strip()=="":self.tempIndex=zeroIndex-2
             self.tempText += "<<"+text
-            if self.tempIndex==0:self.tempIndex=zeroIndex-2
         elif text.strip():
             self.tempText += text
             if self.tempIndex==0:self.tempIndex=zeroIndex
@@ -475,30 +477,35 @@ class TweeParser:
         return self.content[start:self.index]
     def extracted_texts_push(self,type,text,position,context="",id=""):
         if not text.strip():return
-        # --- 新的稳定 Key 生成逻辑 ---
-        # 确保Passage名称也被规范化
-        passage_prefix = self.passage if self.passage else "Global"
-        if type == "passage_name":
-            fingerprint = "title"
+        
+        # 如果传入了自定义id，直接使用它
+        if id:
+            unique_id = f"{self.passage}|{id}"
         else:
-            # 使用我们定义的函数生成指纹
-            fingerprint = generate_fingerprint(text)
-        if not fingerprint:return
-        base_key = f"{passage_prefix}_{fingerprint}"
-        # 冲突解决
-        if base_key in self.passage_keys_count:
-            base_key = f"{passage_prefix}_{generate_fingerprint(text,80)}"
-            if base_key not in self.passage_keys_count:
+            # --- 新的稳定 Key 生成逻辑 ---
+            # 确保Passage名称也被规范化
+            passage_prefix = self.passage if self.passage else "Global"
+            if type == "passage_name":
+                fingerprint = "title"
+            else:
+                # 使用我们定义的函数生成指纹
+                fingerprint = generate_fingerprint(text)
+            if not fingerprint:return
+            base_key = f"{passage_prefix}|{fingerprint}"
+            # 冲突解决
+            if base_key in self.passage_keys_count:
+                base_key = f"{passage_prefix}_{generate_fingerprint(text,80)}"
+                if base_key not in self.passage_keys_count:
+                    self.passage_keys_count[base_key] = 1
+                    unique_id = base_key
+                else:
+                    self.passage_keys_count[base_key] += 1
+                    count = self.passage_keys_count[base_key]
+                    # 添加后缀，例如 _2, _3
+                    unique_id = f"{base_key}_{count}"
+            else:
                 self.passage_keys_count[base_key] = 1
                 unique_id = base_key
-            else:
-                self.passage_keys_count[base_key] += 1
-                count = self.passage_keys_count[base_key]
-                # 添加后缀，例如 _2, _3
-                unique_id = f"{base_key}_{count}"
-        else:
-            self.passage_keys_count[base_key] = 1
-            unique_id = base_key
 
         # contextStat = max(0,len(self.extracted_texts)-3)
         # if not context:

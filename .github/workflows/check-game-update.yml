@@ -1,0 +1,314 @@
+name: Check Game Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_type:
+        description: '游戏版本类型'
+        required: true
+        default: 'ea'
+        type: choice
+        options:
+          - ea
+          - stable
+      force_update:
+        description: '强制更新（忽略版本缓存）'
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: '0 */6 * * *'  # 每6小时检查一次
+
+jobs:
+  check_update:
+    runs-on: ubuntu-latest
+    outputs:
+      has_update: ${{ steps.check.outputs.has_update }}
+      version: ${{ steps.check.outputs.version }}
+      upload_id: ${{ steps.check.outputs.upload_id }}
+      build_id: ${{ steps.check.outputs.build_id }}
+      game_type: ${{ steps.check.outputs.game_type }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install requests
+
+      - name: Restore version cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: .version_cache
+          key: game-version-cache-${{ github.event.inputs.game_type || 'ea' }}
+          restore-keys: |
+            game-version-cache-
+
+      - name: Check for updates
+        id: check
+        env:
+          GAME_TYPE: ${{ github.event.inputs.game_type || 'ea' }}
+          FORCE_UPDATE: ${{ github.event.inputs.force_update || 'false' }}
+        run: |
+          python << 'EOF'
+          import os
+          import json
+          import requests
+
+          # 配置
+          STABLE_GAME_ID = "2151565"
+          EA_GAME_ID = "2499529"
+          UPLOADS_URL = "https://api.itch.io/games/{game_id}/uploads"
+
+          game_type = os.environ.get("GAME_TYPE", "ea")
+          force_update = os.environ.get("FORCE_UPDATE", "false").lower() == "true"
+          game_id = EA_GAME_ID if game_type == "ea" else STABLE_GAME_ID
+
+          print(f"检查游戏更新: {game_type} (game_id: {game_id})")
+          if force_update:
+              print("⚠️ 强制更新模式已启用")
+
+          # 获取上传列表
+          url = UPLOADS_URL.format(game_id=game_id)
+          response = requests.get(url)
+          response.raise_for_status()
+          data = response.json()
+
+          # 查找HTML channel
+          html_upload = None
+          for upload in data.get("uploads", []):
+              if upload.get("channel_name") == "html":
+                  html_upload = upload
+                  break
+
+          if not html_upload:
+              print("未找到HTML channel")
+              exit(1)
+
+          upload_id = html_upload.get("id")
+          build_info = html_upload.get("build", {})
+          build_id = build_info.get("id")
+          version = build_info.get("user_version", str(build_info.get("version", "unknown")))
+
+          print(f"Upload ID: {upload_id}")
+          print(f"Build ID: {build_id}")
+          print(f"Version: {version}")
+
+          # 版本缓存文件
+          os.makedirs(".version_cache", exist_ok=True)
+          version_file = f".version_cache/last_version_{game_type}.json"
+          
+          # 读取上次缓存的版本
+          last_version = None
+          last_build_id = None
+          if os.path.exists(version_file):
+              try:
+                  with open(version_file, "r") as f:
+                      cached = json.load(f)
+                      last_version = cached.get("version")
+                      last_build_id = cached.get("build_id")
+                  print(f"上次缓存版本: {last_version} (build_id: {last_build_id})")
+              except Exception as e:
+                  print(f"读取缓存失败: {e}")
+
+          # 检查是否有新版本
+          has_update = "false"
+          if force_update:
+              has_update = "true"
+              print("✅ 强制更新")
+          elif last_build_id is None:
+              has_update = "true"
+              print("✅ 首次运行，需要更新")
+          elif str(build_id) != str(last_build_id):
+              has_update = "true"
+              print(f"✅ 检测到新版本: {last_version} -> {version}")
+          else:
+              print(f"ℹ️ 版本未变化: {version}")
+
+          # 保存当前版本到缓存
+          with open(version_file, "w") as f:
+              json.dump({
+                  "version": version,
+                  "build_id": build_id,
+                  "upload_id": upload_id
+              }, f)
+          print(f"版本信息已缓存到: {version_file}")
+          
+          # 输出到GitHub Actions
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"has_update={has_update}\n")
+              f.write(f"version={version}\n")
+              f.write(f"upload_id={upload_id}\n")
+              f.write(f"build_id={build_id}\n")
+              f.write(f"game_type={game_type}\n")
+          
+          print(f"\n{'🚀 将执行更新' if has_update == 'true' else '⏭️ 跳过更新'}")
+          EOF
+
+      - name: Save version cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .version_cache
+          key: game-version-cache-${{ github.event.inputs.game_type || 'ea' }}-${{ github.run_id }}
+
+  download_and_export:
+    needs: check_update
+    if: needs.check_update.outputs.has_update == 'true'
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.check_update.outputs.version }}
+      UPLOAD_ID: ${{ needs.check_update.outputs.upload_id }}
+      BUILD_ID: ${{ needs.check_update.outputs.build_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install requests selenium webdriver-manager
+
+      - name: Setup Chrome
+        uses: browser-actions/setup-chrome@latest
+
+      - name: Download HTML file
+        run: |
+          python << 'EOF'
+          import os
+          import requests
+
+          upload_id = os.environ["UPLOAD_ID"]
+          build_id = os.environ["BUILD_ID"]
+          version = os.environ["VERSION"]
+
+          html_url = f"https://html-classic.itch.zone/html/{upload_id}-{build_id}/index.html"
+          print(f"下载HTML: {html_url}")
+
+          response = requests.get(html_url, stream=True)
+          response.raise_for_status()
+
+          os.makedirs("temp_update_files", exist_ok=True)
+          html_path = f"temp_update_files/index{version}.html"
+          
+          with open(html_path, "wb") as f:
+              for chunk in response.iter_content(chunk_size=8192):
+                  f.write(chunk)
+          
+          print(f"HTML已保存到: {html_path}")
+          
+          # 保存路径供后续步骤使用
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"HTML_PATH={os.path.abspath(html_path)}\n")
+          EOF
+
+      - name: Export story data
+        run: |
+          python << 'EOF'
+          import os
+          import time
+          from selenium import webdriver
+          from selenium.webdriver.chrome.service import Service as ChromeService
+          from webdriver_manager.chrome import ChromeDriverManager
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+          from selenium.webdriver.support import expected_conditions as EC
+
+          html_path = os.environ["HTML_PATH"]
+          version = os.environ["VERSION"]
+          
+          # 检查story-export.js是否存在
+          js_path = "story-export.js"
+          if not os.path.exists(js_path):
+              print(f"警告: {js_path} 不存在，跳过浏览器自动化步骤")
+              print("请确保story-export.js文件已添加到仓库中")
+              exit(0)
+
+          # 配置Chrome headless
+          options = webdriver.ChromeOptions()
+          options.add_argument("--headless=new")
+          options.add_argument("--no-sandbox")
+          options.add_argument("--disable-dev-shm-usage")
+          options.add_argument("--disable-gpu")
+          
+          download_dir = os.path.abspath(".")
+          prefs = {
+              "download.default_directory": download_dir,
+              "download.prompt_for_download": False,
+              "download.directory_upgrade": True,
+              "safebrowsing.enabled": True
+          }
+          options.add_experimental_option("prefs", prefs)
+
+          driver = None
+          try:
+              service = ChromeService(ChromeDriverManager().install())
+              driver = webdriver.Chrome(service=service, options=options)
+              
+              # headless模式下设置下载行为
+              driver.execute_cdp_cmd("Page.setDownloadBehavior", {
+                  "behavior": "allow",
+                  "downloadPath": download_dir
+              })
+              
+              driver.get("file://" + html_path)
+              
+              WebDriverWait(driver, 10).until(
+                  EC.presence_of_element_located((By.TAG_NAME, "body"))
+              )
+              print("页面已加载")
+
+              with open(js_path, "r", encoding="utf-8") as f:
+                  js_code = f.read()
+              
+              print("执行导出脚本...")
+              driver.execute_script(js_code)
+              
+              # 等待下载完成
+              zip_path = os.path.join(download_dir, "story_export.zip")
+              timeout = 60
+              start_time = time.time()
+              while not os.path.exists(zip_path):
+                  time.sleep(1)
+                  if time.time() - start_time > timeout:
+                      print("下载超时")
+                      exit(1)
+              
+              print(f"导出完成: {zip_path}")
+
+          except Exception as e:
+              print(f"错误: {e}")
+              exit(1)
+          finally:
+              if driver:
+                  driver.quit()
+          EOF
+
+      - name: Upload HTML artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: game-html-${{ env.VERSION }}
+          path: temp_update_files/*.html
+          if-no-files-found: warn
+
+      - name: Upload story export artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: story-export-${{ env.VERSION }}
+          path: story_export.zip
+          if-no-files-found: warn
