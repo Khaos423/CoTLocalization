@@ -6,18 +6,22 @@ on:
       game_type:
         description: '游戏版本类型'
         required: true
-        default: 'ea'
+        default: 'stable'
         type: choice
         options:
           - ea
           - stable
+      ea_password:
+        description: 'EA版密码（仅EA版需要）'
+        required: false
+        type: string
       force_update:
         description: '强制更新（忽略版本缓存）'
         required: false
         default: false
         type: boolean
   schedule:
-    - cron: '0 */6 * * *'  # 每6小时检查一次
+    - cron: '0 */6 * * *'  # 每6小时检查一次（仅检查稳定版）
 
 jobs:
   check_update:
@@ -48,16 +52,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .version_cache
-          key: game-version-cache-${{ github.event.inputs.game_type || 'ea' }}
+          key: game-version-cache-${{ github.event.inputs.game_type || 'stable' }}
           restore-keys: |
             game-version-cache-
 
       - name: Check for updates
         id: check
         env:
-          GAME_TYPE: ${{ github.event.inputs.game_type || 'ea' }}
+          GAME_TYPE: ${{ github.event.inputs.game_type || 'stable' }}
           FORCE_UPDATE: ${{ github.event.inputs.force_update || 'false' }}
           ITCH_API_KEY: ${{ secrets.ITCH_API_KEY }}
+          EA_PASSWORD: ${{ github.event.inputs.ea_password }}
         run: |
           python << 'EOF'
           import os
@@ -69,8 +74,9 @@ jobs:
           EA_GAME_ID = "2499529"
           UPLOADS_URL = "https://api.itch.io/games/{game_id}/uploads"
           API_KEY = os.environ.get("ITCH_API_KEY", "")
+          EA_PASSWORD = os.environ.get("EA_PASSWORD", "")
 
-          game_type = os.environ.get("GAME_TYPE", "ea")
+          game_type = os.environ.get("GAME_TYPE", "stable")
           force_update = os.environ.get("FORCE_UPDATE", "false").lower() == "true"
           game_id = EA_GAME_ID if game_type == "ea" else STABLE_GAME_ID
 
@@ -78,10 +84,19 @@ jobs:
           if force_update:
               print("⚠️ 强制更新模式已启用")
 
-          # 获取上传列表
+          if not API_KEY:
+              print("⚠️ 警告: ITCH_API_KEY未设置")
+          
+          if game_type == "ea" and not EA_PASSWORD:
+              print("❌ 错误: EA版需要提供密码")
+              exit(1)
+
+          # 获取上传列表 - 使用Header认证
           url = UPLOADS_URL.format(game_id=game_id)
           headers = {"Authorization": API_KEY} if API_KEY else {}
-          response = requests.get(url, headers=headers)
+          params = {"password": EA_PASSWORD} if game_type == "ea" and EA_PASSWORD else {}
+          
+          response = requests.get(url, headers=headers, params=params)
           response.raise_for_status()
           data = response.json()
 

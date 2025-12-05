@@ -28,7 +28,7 @@ FINAL_EXPORT_ZIP_NAME = "story_export.zip"
 FINAL_EXPORT_ZIP_PATH = os.path.join(BASE_DIR, FINAL_EXPORT_ZIP_NAME)
 
 # --- API Endpoints ---
-# 获取游戏上传列表的API
+# 获取游戏上传列表的API - 使用Header认证
 UPLOADS_URL_TEMPLATE = "https://api.itch.io/games/{game_id}/uploads"
 # 直接访问HTML的URL模板 - 使用upload_id和build_id
 HTML_URL_TEMPLATE = "https://html-classic.itch.zone/html/{upload_id}-{build_id}/index.html"
