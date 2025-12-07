@@ -213,3 +213,4 @@ jobs:
           name: Release v${{ env.GAME_VERSION }}-chs-${{ github.event.inputs.chinese_version || env.CHINESE_VERSION }}
           tag_name: ${{ env.GAME_VERSION }}-chs-${{ github.event.inputs.chinese_version || env.CHINESE_VERSION }}-${{ github.sha }}
           body: release v${{ env.GAME_VERSION }}-chs-${{ github.event.inputs.chinese_version || env.CHINESE_VERSION }}
+          prerelease: true

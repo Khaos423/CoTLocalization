@@ -357,6 +357,8 @@ jobs:
     needs: [check_update, download_and_export]
     if: needs.check_update.outputs.has_update == 'true'
     runs-on: windows-latest
+    permissions:
+      contents: write
     env:
       VERSION: ${{ needs.check_update.outputs.version }}
       PYTHONIOENCODING: utf-8
@@ -565,10 +567,30 @@ jobs:
           path: final-output/*.html
           if-no-files-found: warn
 
+      - name: Get current date
+        id: date
+        shell: bash
+        run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+
+      - name: Release ModLoader HTML
+        uses: softprops/action-gh-release@v1
+        with:
+          files: final-output/*.html
+          name: ModLoader HTML v${{ env.VERSION }}-${{ env.MODLOADER_VERSION }}-${{ steps.date.outputs.date }}
+          tag_name: modloader-html-${{ env.VERSION }}-${{ env.MODLOADER_VERSION }}-${{ steps.date.outputs.date }}-${{ github.sha }}
+          body: |
+            ModLoader injected HTML for Course of Temptation
+            - Game Version: ${{ env.VERSION }}
+            - ModLoader Version: ${{ env.MODLOADER_VERSION }}
+            - Build Date: ${{ steps.date.outputs.date }}
+          prerelease: true
+
   build_android:
     needs: [check_update, inject_modloader]
     if: needs.check_update.outputs.has_update == 'true' && needs.check_update.outputs.android_upload_id != ''
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       VERSION: ${{ needs.check_update.outputs.version }}
       ANDROID_UPLOAD_ID: ${{ needs.check_update.outputs.android_upload_id }}
@@ -814,3 +836,23 @@ jobs:
           name: CoT-Android-ModLoader-${{ env.VERSION }}-${{ env.MODLOADER_VERSION }}
           path: apk-signed/*.apk
           if-no-files-found: error
+
+      - name: Get current date
+        id: date
+        shell: bash
+        run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+
+      - name: Release Android APK
+        uses: softprops/action-gh-release@v1
+        with:
+          files: apk-signed/*.apk
+          name: Android APK v${{ env.VERSION }}-${{ env.MODLOADER_VERSION }}-${{ steps.date.outputs.date }}
+          tag_name: android-apk-${{ env.VERSION }}-${{ env.MODLOADER_VERSION }}-${{ steps.date.outputs.date }}-${{ github.sha }}
+          body: |
+            ModLoader injected Android APK for Course of Temptation
+            - Game Version: ${{ env.VERSION }}
+            - ModLoader Version: ${{ env.MODLOADER_VERSION }}
+            - Build Date: ${{ steps.date.outputs.date }}
+            
+            ⚠️ This APK is signed with a debug key. You may need to uninstall the original app before installing this version.
+          prerelease: true
