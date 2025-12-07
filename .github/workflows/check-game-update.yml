@@ -375,39 +375,67 @@ jobs:
       - name: Extract ModLoader Package
         shell: pwsh
         run: |
-          Write-Host "Downloaded files:"
-          Get-ChildItem -Path "modloader-download" -Recurse
+          Write-Host "=== Downloaded files in modloader-download ==="
+          Get-ChildItem -Path "modloader-download" -Recurse | ForEach-Object { Write-Host $_.FullName }
           
-          # 查找zip文件 - 使用 ml-package 避免与仓库 modloader 目录冲突
+          # 创建目标目录
+          New-Item -ItemType Directory -Path "ml-package" -Force | Out-Null
+          
+          # 查找zip文件
           $zipFile = Get-ChildItem -Path "modloader-download" -Filter "*.zip" -Recurse | Select-Object -First 1
           if ($zipFile) {
-            Write-Host "Extracting: $($zipFile.FullName)"
+            Write-Host "Found zip file: $($zipFile.FullName)"
+            Write-Host "Extracting to ml-package..."
             Expand-Archive -Path $zipFile.FullName -DestinationPath "ml-package" -Force
           } else {
-            # 如果没有zip，可能直接是文件
-            Write-Host "No zip found, using downloaded files directly"
-            New-Item -ItemType Directory -Path "ml-package" -Force | Out-Null
-            Copy-Item -Path "modloader-download/*" -Destination "ml-package" -Recurse -Force
+            # 检查是否直接下载了目录内容
+            $distInsertTools = Get-ChildItem -Path "modloader-download" -Directory -Filter "dist-insertTools" -Recurse | Select-Object -First 1
+            if ($distInsertTools) {
+              Write-Host "Found dist-insertTools directory, copying parent contents..."
+              $parentPath = Split-Path $distInsertTools.FullName -Parent
+              Copy-Item -Path "$parentPath/*" -Destination "ml-package" -Recurse -Force
+            } else {
+              Write-Host "No zip or known structure found, copying all files..."
+              Copy-Item -Path "modloader-download/*" -Destination "ml-package" -Recurse -Force
+            }
           }
           
-          Write-Host "ModLoader contents:"
-          Get-ChildItem -Path "ml-package" -Recurse | Select-Object -First 30
+          Write-Host ""
+          Write-Host "=== ModLoader package contents (ml-package) ==="
+          Get-ChildItem -Path "ml-package" | ForEach-Object { Write-Host $_.Name }
+          
+          # 验证关键目录存在
+          if (Test-Path "ml-package/dist-insertTools") {
+            Write-Host "✓ dist-insertTools found"
+          } else {
+            Write-Host "✗ dist-insertTools NOT found"
+            Write-Host "Full tree:"
+            Get-ChildItem -Path "ml-package" -Recurse | Select-Object -First 50 | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+          
+          if (Test-Path "ml-package/dist-BeforeSC2") {
+            Write-Host "✓ dist-BeforeSC2 found"
+          } else {
+            Write-Host "✗ dist-BeforeSC2 NOT found"
+          }
 
       - name: Get ModLoader version
         id: modloader_version
         shell: bash
         run: |
           # 从 dist-BeforeSC2/Utils.js 中提取版本号
-          UTILS_FILE=$(find ml-package -name "Utils.js" -path "*/dist-BeforeSC2/*" | head -1)
+          UTILS_FILE="ml-package/dist-BeforeSC2/Utils.js"
           
+          echo "Looking for: $UTILS_FILE"
           if [ -f "$UTILS_FILE" ]; then
-            echo "Found Utils.js: $UTILS_FILE"
-            # 提取 return 'xxxx'; 中的版本号
-            ML_VERSION=$(grep -oP "return\s*['\"](\d+\.\d+\.\d+)['\"]" "$UTILS_FILE" | grep -oP "\d+\.\d+\.\d+" | head -1)
-            if [ -z "$ML_VERSION" ]; then
-              # 备选方案：提取 get version() { return 'xxxx'; }
-              ML_VERSION=$(grep -oP "version.*['\"](\d+\.\d+\.\d+)['\"]" "$UTILS_FILE" | grep -oP "\d+\.\d+\.\d+" | head -1)
-            fi
+            echo "Found Utils.js"
+            # 提取版本号 - 简化正则
+            ML_VERSION=$(grep -oE "[0-9]+\.[0-9]+\.[0-9]+" "$UTILS_FILE" | head -1)
+            echo "Extracted version: $ML_VERSION"
+          else
+            echo "Utils.js not found, searching..."
+            find ml-package -name "Utils.js" -type f
           fi
           
           if [ -z "$ML_VERSION" ]; then
@@ -418,9 +446,10 @@ jobs:
           echo "MODLOADER_VERSION=v$ML_VERSION" >> $GITHUB_ENV
 
       - name: Copy modList.json
-        shell: pwsh
+        shell: bash
         run: |
-          Copy-Item "modloader/modList.json" "ml-package/modList.json" -Force
+          cp modloader/modList.json ml-package/modList.json
+          echo "Copied modList.json to ml-package/"
 
       - name: Find and set HTML filename
         shell: bash
