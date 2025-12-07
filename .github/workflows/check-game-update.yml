@@ -378,27 +378,27 @@ jobs:
           Write-Host "Downloaded files:"
           Get-ChildItem -Path "modloader-download" -Recurse
           
-          # 查找zip文件
+          # 查找zip文件 - 使用 ml-package 避免与仓库 modloader 目录冲突
           $zipFile = Get-ChildItem -Path "modloader-download" -Filter "*.zip" -Recurse | Select-Object -First 1
           if ($zipFile) {
             Write-Host "Extracting: $($zipFile.FullName)"
-            Expand-Archive -Path $zipFile.FullName -DestinationPath "ModLoader" -Force
+            Expand-Archive -Path $zipFile.FullName -DestinationPath "ml-package" -Force
           } else {
             # 如果没有zip，可能直接是文件
             Write-Host "No zip found, using downloaded files directly"
-            New-Item -ItemType Directory -Path "ModLoader" -Force | Out-Null
-            Copy-Item -Path "modloader-download/*" -Destination "ModLoader" -Recurse -Force
+            New-Item -ItemType Directory -Path "ml-package" -Force | Out-Null
+            Copy-Item -Path "modloader-download/*" -Destination "ml-package" -Recurse -Force
           }
           
           Write-Host "ModLoader contents:"
-          Get-ChildItem -Path "ModLoader" -Recurse | Select-Object -First 30
+          Get-ChildItem -Path "ml-package" -Recurse | Select-Object -First 30
 
       - name: Get ModLoader version
         id: modloader_version
         shell: bash
         run: |
           # 从 dist-BeforeSC2/Utils.js 中提取版本号
-          UTILS_FILE=$(find ModLoader -name "Utils.js" -path "*/dist-BeforeSC2/*" | head -1)
+          UTILS_FILE=$(find ml-package -name "Utils.js" -path "*/dist-BeforeSC2/*" | head -1)
           
           if [ -f "$UTILS_FILE" ]; then
             echo "Found Utils.js: $UTILS_FILE"
@@ -420,7 +420,7 @@ jobs:
       - name: Copy modList.json
         shell: pwsh
         run: |
-          Copy-Item "modloader/modList.json" "ModLoader/modList.json" -Force
+          Copy-Item "modloader/modList.json" "ml-package/modList.json" -Force
 
       - name: Find and set HTML filename
         shell: bash
@@ -433,7 +433,7 @@ jobs:
 
       - name: SC2 Replace
         shell: pwsh
-        working-directory: ${{ github.workspace }}/ModLoader
+        working-directory: ${{ github.workspace }}/ml-package
         run: |
           $htmlPath = "${{ github.workspace }}/${{ env.HTML_FILE }}"
           $formatPath = Get-ChildItem -Path "." -Filter "format.js" -Recurse | Select-Object -First 1
@@ -447,14 +447,14 @@ jobs:
 
       - name: Inject ModLoader
         shell: pwsh
-        working-directory: ${{ github.workspace }}/ModLoader
+        working-directory: ${{ github.workspace }}/ml-package
         run: |
           $htmlPath = "${{ github.workspace }}/${{ env.HTML_FILE }}.sc2replace.html"
           node "dist-insertTools/insert2html.js" $htmlPath "modList.json" "dist-BeforeSC2/BeforeSC2.js" ""
 
       - name: Inject ModLoader (polyfill)
         shell: pwsh
-        working-directory: ${{ github.workspace }}/ModLoader
+        working-directory: ${{ github.workspace }}/ml-package
         run: |
           $htmlPath = "${{ github.workspace }}/${{ env.HTML_FILE }}.sc2replace.html"
           $polyfillPath = "dist-BeforeSC2/polyfill.js"
