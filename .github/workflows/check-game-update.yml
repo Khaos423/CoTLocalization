@@ -660,25 +660,43 @@ jobs:
           print(f"APK已下载: {apk_path} ({file_size / 1024 / 1024:.2f} MB)")
           EOF
 
-      - name: Inspect downloaded APK
+      - name: Extract real APK from downloaded archive
         run: |
-          echo "检查下载的APK文件..."
+          echo "检查下载的文件..."
           file apk-download/original.apk
           echo ""
-          echo "APK文件头信息:"
-          xxd apk-download/original.apk | head -5
+          echo "尝试列出内容:"
+          unzip -l apk-download/original.apk | head -20
           echo ""
-          echo "尝试列出APK内容 (使用unzip):"
-          unzip -l apk-download/original.apk | head -50
+          
+          # itch.io下载的是ZIP压缩包，里面包含真正的APK
+          echo "解压外层压缩包..."
+          mkdir -p apk-temp
+          unzip -o apk-download/original.apk -d apk-temp
+          
+          # 找到真正的APK文件
+          REAL_APK=$(find apk-temp -name "*.apk" -type f | head -1)
+          if [ -z "$REAL_APK" ]; then
+            echo "❌ 未找到APK文件"
+            ls -la apk-temp/
+            exit 1
+          fi
+          
+          echo "找到真正的APK: $REAL_APK"
+          mv "$REAL_APK" apk-download/game.apk
+          echo "REAL_APK_PATH=apk-download/game.apk" >> $GITHUB_ENV
+          
+          file apk-download/game.apk
+          ls -la apk-download/
 
-      - name: Extract APK using unzip
+      - name: Extract APK contents
         run: |
-          echo "使用unzip解压APK..."
+          echo "解压APK内容..."
           mkdir -p apk-extracted
-          unzip -o apk-download/original.apk -d apk-extracted
+          unzip -o apk-download/game.apk -d apk-extracted
           echo ""
           echo "APK内容结构:"
-          find apk-extracted -type f | head -50
+          find apk-extracted -type d | head -30
           echo ""
           echo "查找所有html文件:"
           find apk-extracted -name "*.html" -type f
