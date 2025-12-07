@@ -333,3 +333,176 @@ jobs:
           name: story-export-${{ env.VERSION }}
           path: story_export.zip
           if-no-files-found: warn
+
+  inject_modloader:
+    needs: [check_update, download_and_export]
+    if: needs.check_update.outputs.has_update == 'true'
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.check_update.outputs.version }}
+      PYTHONIOENCODING: utf-8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download HTML artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: game-html-${{ env.VERSION }}
+          path: game-html
+
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18.x
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download ModLoader Package from workflow artifact
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          repo: Lyoko-Jeremie/sugarcube-2-ModLoader
+          workflow: Build-ModLoader-Package.yml
+          workflow_conclusion: success
+          name: ModLoader Package
+          path: modloader-download
+          search_artifacts: true
+
+      - name: Extract ModLoader Package
+        shell: pwsh
+        run: |
+          Write-Host "Downloaded files:"
+          Get-ChildItem -Path "modloader-download" -Recurse
+          
+          # 查找zip文件
+          $zipFile = Get-ChildItem -Path "modloader-download" -Filter "*.zip" -Recurse | Select-Object -First 1
+          if ($zipFile) {
+            Write-Host "Extracting: $($zipFile.FullName)"
+            Expand-Archive -Path $zipFile.FullName -DestinationPath "ModLoader" -Force
+          } else {
+            # 如果没有zip，可能直接是文件
+            Write-Host "No zip found, using downloaded files directly"
+            New-Item -ItemType Directory -Path "ModLoader" -Force | Out-Null
+            Copy-Item -Path "modloader-download/*" -Destination "ModLoader" -Recurse -Force
+          }
+          
+          Write-Host "ModLoader contents:"
+          Get-ChildItem -Path "ModLoader" -Recurse | Select-Object -First 30
+
+      - name: Get ModLoader version
+        id: modloader_version
+        shell: bash
+        run: |
+          # 从 dist-BeforeSC2/Utils.js 中提取版本号
+          UTILS_FILE=$(find ModLoader -name "Utils.js" -path "*/dist-BeforeSC2/*" | head -1)
+          
+          if [ -f "$UTILS_FILE" ]; then
+            echo "Found Utils.js: $UTILS_FILE"
+            # 提取 return 'xxxx'; 中的版本号
+            ML_VERSION=$(grep -oP "return\s*['\"](\d+\.\d+\.\d+)['\"]" "$UTILS_FILE" | grep -oP "\d+\.\d+\.\d+" | head -1)
+            if [ -z "$ML_VERSION" ]; then
+              # 备选方案：提取 get version() { return 'xxxx'; }
+              ML_VERSION=$(grep -oP "version.*['\"](\d+\.\d+\.\d+)['\"]" "$UTILS_FILE" | grep -oP "\d+\.\d+\.\d+" | head -1)
+            fi
+          fi
+          
+          if [ -z "$ML_VERSION" ]; then
+            ML_VERSION="unknown"
+          fi
+          
+          echo "ModLoader Version: v$ML_VERSION"
+          echo "MODLOADER_VERSION=v$ML_VERSION" >> $GITHUB_ENV
+
+      - name: Copy modList.json
+        shell: pwsh
+        run: |
+          Copy-Item "modloader/modList.json" "ModLoader/modList.json" -Force
+
+      - name: Find and set HTML filename
+        shell: bash
+        run: |
+          HTML_FILE=$(ls game-html/*.html | head -1)
+          HTML_BASENAME=$(basename "$HTML_FILE")
+          echo "HTML_FILE=$HTML_FILE" >> $GITHUB_ENV
+          echo "HTML_BASENAME=$HTML_BASENAME" >> $GITHUB_ENV
+          echo "Found HTML file: $HTML_FILE"
+
+      - name: SC2 Replace
+        shell: pwsh
+        working-directory: ${{ github.workspace }}/ModLoader
+        run: |
+          $htmlPath = "${{ github.workspace }}/${{ env.HTML_FILE }}"
+          $formatPath = Get-ChildItem -Path "." -Filter "format.js" -Recurse | Select-Object -First 1
+          if ($formatPath) {
+            Write-Host "Using format.js: $($formatPath.FullName)"
+            node "dist-insertTools/sc2ReplaceTool.js" $htmlPath $formatPath.FullName
+          } else {
+            Write-Host "format.js not found, skipping SC2 replace"
+            Copy-Item $htmlPath "$htmlPath.sc2replace.html"
+          }
+
+      - name: Inject ModLoader
+        shell: pwsh
+        working-directory: ${{ github.workspace }}/ModLoader
+        run: |
+          $htmlPath = "${{ github.workspace }}/${{ env.HTML_FILE }}.sc2replace.html"
+          node "dist-insertTools/insert2html.js" $htmlPath "modList.json" "dist-BeforeSC2/BeforeSC2.js" ""
+
+      - name: Inject ModLoader (polyfill)
+        shell: pwsh
+        working-directory: ${{ github.workspace }}/ModLoader
+        run: |
+          $htmlPath = "${{ github.workspace }}/${{ env.HTML_FILE }}.sc2replace.html"
+          $polyfillPath = "dist-BeforeSC2/polyfill.js"
+          if (Test-Path $polyfillPath) {
+            node "dist-insertTools/insert2html-polyfill.js" $htmlPath "modList.json" "dist-BeforeSC2/BeforeSC2.js" $polyfillPath "ManualPolyfill.js"
+          } else {
+            Write-Host "polyfill.js not found, skipping polyfill injection"
+          }
+
+      - name: Apply CoT specific patches
+        shell: bash
+        run: |
+          MOD_HTML="${{ env.HTML_FILE }}.sc2replace.html.mod.html"
+          POLYFILL_HTML="${{ env.HTML_FILE }}.sc2replace.html.mod-polyfill.html"
+          
+          if [ -f "$MOD_HTML" ]; then
+            python modloader/replace.py "$MOD_HTML"
+          fi
+          
+          if [ -f "$POLYFILL_HTML" ]; then
+            python modloader/replace.py "$POLYFILL_HTML"
+          fi
+
+      - name: Prepare final output
+        shell: bash
+        run: |
+          mkdir -p final-output
+          
+          MOD_HTML="${{ env.HTML_FILE }}.sc2replace.html.mod.html"
+          POLYFILL_HTML="${{ env.HTML_FILE }}.sc2replace.html.mod-polyfill.html"
+          GAME_VER="${VERSION}"
+          ML_VER="${MODLOADER_VERSION}"
+          
+          if [ -f "$MOD_HTML" ]; then
+            cp "$MOD_HTML" "final-output/CourseOfTemptation-ModLoader-${GAME_VER}-${ML_VER}.html"
+            echo "Created: CourseOfTemptation-ModLoader-${GAME_VER}-${ML_VER}.html"
+          fi
+          
+          if [ -f "$POLYFILL_HTML" ]; then
+            cp "$POLYFILL_HTML" "final-output/CourseOfTemptation-ModLoader-${GAME_VER}-${ML_VER}-polyfill.html"
+            echo "Created: CourseOfTemptation-ModLoader-${GAME_VER}-${ML_VER}-polyfill.html"
+          fi
+          
+          ls -la final-output/
+
+      - name: Upload ModLoader injected HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: CourseOfTemptation-ModLoader-${{ env.VERSION }}-${{ env.MODLOADER_VERSION }}
+          path: final-output/*.html
+          if-no-files-found: warn
