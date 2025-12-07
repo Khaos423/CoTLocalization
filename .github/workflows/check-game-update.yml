@@ -32,6 +32,8 @@ jobs:
       upload_id: ${{ steps.check.outputs.upload_id }}
       build_id: ${{ steps.check.outputs.build_id }}
       game_type: ${{ steps.check.outputs.game_type }}
+      android_upload_id: ${{ steps.check.outputs.android_upload_id }}
+      android_build_id: ${{ steps.check.outputs.android_build_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -102,10 +104,13 @@ jobs:
 
           # 查找HTML channel
           html_upload = None
+          android_upload = None
           for upload in data.get("uploads", []):
-              if upload.get("channel_name") == "html":
+              channel = upload.get("channel_name", "")
+              if channel == "html":
                   html_upload = upload
-                  break
+              elif channel == "android":
+                  android_upload = upload
 
           if not html_upload:
               print("未找到HTML channel")
@@ -116,9 +121,21 @@ jobs:
           build_id = build_info.get("id")
           version = build_info.get("user_version", str(build_info.get("version", "unknown")))
 
-          print(f"Upload ID: {upload_id}")
-          print(f"Build ID: {build_id}")
+          print(f"HTML Upload ID: {upload_id}")
+          print(f"HTML Build ID: {build_id}")
           print(f"Version: {version}")
+
+          # Android APK信息
+          android_upload_id = ""
+          android_build_id = ""
+          if android_upload:
+              android_upload_id = str(android_upload.get("id", ""))
+              android_build_info = android_upload.get("build", {})
+              android_build_id = str(android_build_info.get("id", ""))
+              print(f"Android Upload ID: {android_upload_id}")
+              print(f"Android Build ID: {android_build_id}")
+          else:
+              print("⚠️ 未找到Android channel")
 
           # 版本缓存文件
           os.makedirs(".version_cache", exist_ok=True)
@@ -167,6 +184,8 @@ jobs:
               f.write(f"upload_id={upload_id}\n")
               f.write(f"build_id={build_id}\n")
               f.write(f"game_type={game_type}\n")
+              f.write(f"android_upload_id={android_upload_id}\n")
+              f.write(f"android_build_id={android_build_id}\n")
           
           print(f"\n{'🚀 将执行更新' if has_update == 'true' else '⏭️ 跳过更新'}")
           EOF
@@ -545,3 +564,204 @@ jobs:
           name: CourseOfTemptation-ModLoader-${{ env.VERSION }}-${{ env.MODLOADER_VERSION }}
           path: final-output/*.html
           if-no-files-found: warn
+
+  build_android:
+    needs: [check_update, inject_modloader]
+    if: needs.check_update.outputs.has_update == 'true' && needs.check_update.outputs.android_upload_id != ''
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.check_update.outputs.version }}
+      ANDROID_UPLOAD_ID: ${{ needs.check_update.outputs.android_upload_id }}
+      ANDROID_BUILD_ID: ${{ needs.check_update.outputs.android_build_id }}
+      GAME_TYPE: ${{ needs.check_update.outputs.game_type }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install requests
+          # 安装apktool和Android SDK工具
+          sudo apt-get update
+          sudo apt-get install -y apktool zipalign apksigner
+
+      - name: Download ModLoader HTML artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: CourseOfTemptation-ModLoader-*
+          path: modloader-html
+          merge-multiple: true
+
+      - name: Get ModLoader version from artifact
+        id: get_ml_version
+        shell: bash
+        run: |
+          # 从下载的artifact文件名中提取ModLoader版本
+          HTML_FILE=$(ls modloader-html/*.html | grep -v polyfill | head -1)
+          if [ -n "$HTML_FILE" ]; then
+            BASENAME=$(basename "$HTML_FILE" .html)
+            # 文件名格式: CourseOfTemptation-ModLoader-{GAME_VER}-{ML_VER}.html
+            ML_VER=$(echo "$BASENAME" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | tail -1)
+            echo "MODLOADER_VERSION=$ML_VER" >> $GITHUB_ENV
+            echo "Detected ModLoader version: $ML_VER"
+          else
+            echo "MODLOADER_VERSION=unknown" >> $GITHUB_ENV
+          fi
+
+      - name: Download official Android APK
+        env:
+          ITCH_API_KEY: ${{ secrets.ITCH_API_KEY }}
+          EA_PASSWORD: ${{ github.event.inputs.ea_password }}
+        run: |
+          python << 'EOF'
+          import os
+          import requests
+          
+          upload_id = os.environ["ANDROID_UPLOAD_ID"]
+          build_id = os.environ["ANDROID_BUILD_ID"]
+          api_key = os.environ.get("ITCH_API_KEY", "")
+          ea_password = os.environ.get("EA_PASSWORD", "")
+          game_type = os.environ.get("GAME_TYPE", "stable")
+          
+          # 构建下载URL
+          # itch.io APK下载格式
+          download_url = f"https://api.itch.io/uploads/{upload_id}/download"
+          
+          headers = {"Authorization": api_key} if api_key else {}
+          params = {}
+          if game_type == "ea" and ea_password:
+              params["password"] = ea_password
+          
+          print(f"下载Android APK: {download_url}")
+          
+          response = requests.get(download_url, headers=headers, params=params, allow_redirects=True, stream=True)
+          response.raise_for_status()
+          
+          os.makedirs("apk-download", exist_ok=True)
+          apk_path = "apk-download/original.apk"
+          
+          with open(apk_path, "wb") as f:
+              for chunk in response.iter_content(chunk_size=8192):
+                  f.write(chunk)
+          
+          file_size = os.path.getsize(apk_path)
+          print(f"APK已下载: {apk_path} ({file_size / 1024 / 1024:.2f} MB)")
+          EOF
+
+      - name: Decompile APK
+        run: |
+          echo "解包APK..."
+          apktool d apk-download/original.apk -o apk-decompiled -f
+          echo "APK已解包到 apk-decompiled/"
+          ls -la apk-decompiled/
+
+      - name: Find and replace HTML file
+        run: |
+          echo "查找HTML文件位置..."
+          
+          # 常见的HTML位置
+          HTML_LOCATIONS=(
+            "apk-decompiled/assets/www/index.html"
+            "apk-decompiled/assets/index.html"
+            "apk-decompiled/assets/game/index.html"
+          )
+          
+          TARGET_HTML=""
+          for loc in "${HTML_LOCATIONS[@]}"; do
+            if [ -f "$loc" ]; then
+              TARGET_HTML="$loc"
+              echo "找到HTML: $TARGET_HTML"
+              break
+            fi
+          done
+          
+          if [ -z "$TARGET_HTML" ]; then
+            echo "尝试搜索index.html..."
+            TARGET_HTML=$(find apk-decompiled -name "index.html" -type f | head -1)
+          fi
+          
+          if [ -z "$TARGET_HTML" ]; then
+            echo "❌ 未找到index.html"
+            exit 1
+          fi
+          
+          echo "TARGET_HTML=$TARGET_HTML" >> $GITHUB_ENV
+          echo "HTML文件位置: $TARGET_HTML"
+          
+          # 获取目标目录
+          TARGET_DIR=$(dirname "$TARGET_HTML")
+          echo "TARGET_DIR=$TARGET_DIR" >> $GITHUB_ENV
+
+      - name: Replace HTML with ModLoader version
+        run: |
+          # 找到ModLoader HTML (普通版和polyfill版)
+          MOD_HTML=$(ls modloader-html/*.html | grep -v polyfill | head -1)
+          POLYFILL_HTML=$(ls modloader-html/*.html | grep polyfill | head -1)
+          
+          echo "ModLoader HTML: $MOD_HTML"
+          echo "Polyfill HTML: $POLYFILL_HTML"
+          
+          # 创建两个版本的APK目录
+          cp -r apk-decompiled apk-decompiled-mod
+          cp -r apk-decompiled apk-decompiled-polyfill
+          
+          # 替换HTML文件
+          if [ -n "$MOD_HTML" ]; then
+            cp "$MOD_HTML" "apk-decompiled-mod/${TARGET_HTML#apk-decompiled/}"
+            echo "已替换普通版HTML"
+          fi
+          
+          if [ -n "$POLYFILL_HTML" ]; then
+            cp "$POLYFILL_HTML" "apk-decompiled-polyfill/${TARGET_HTML#apk-decompiled/}"
+            echo "已替换Polyfill版HTML"
+          fi
+
+      - name: Rebuild APK (normal version)
+        run: |
+          echo "重新打包APK (普通版)..."
+          mkdir -p apk-output
+          apktool b apk-decompiled-mod -o apk-output/unsigned-mod.apk
+          echo "APK已重新打包"
+
+      - name: Rebuild APK (polyfill version)
+        run: |
+          echo "重新打包APK (Polyfill版)..."
+          apktool b apk-decompiled-polyfill -o apk-output/unsigned-polyfill.apk
+          echo "APK已重新打包"
+
+      - name: Sign APK with debug key
+        run: |
+          mkdir -p apk-signed
+          
+          # 生成debug签名密钥
+          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          
+          # zipalign
+          zipalign -v 4 apk-output/unsigned-mod.apk apk-output/aligned-mod.apk
+          zipalign -v 4 apk-output/unsigned-polyfill.apk apk-output/aligned-polyfill.apk
+          
+          # 使用apksigner签名
+          apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --out "apk-signed/CoT-ModLoader-${VERSION}-${MODLOADER_VERSION}.apk" apk-output/aligned-mod.apk
+          apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --out "apk-signed/CoT-ModLoader-${VERSION}-${MODLOADER_VERSION}-polyfill.apk" apk-output/aligned-polyfill.apk
+          
+          echo "APK已签名"
+          ls -la apk-signed/
+
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CoT-Android-ModLoader-${{ env.VERSION }}-${{ env.MODLOADER_VERSION }}
+          path: apk-signed/*.apk
+          if-no-files-found: error
