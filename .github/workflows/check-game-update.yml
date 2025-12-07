@@ -372,52 +372,42 @@ jobs:
           path: modloader-download
           search_artifacts: true
 
-      - name: Extract ModLoader Package
+      - name: Setup ModLoader Package
         shell: pwsh
         run: |
-          Write-Host "=== Downloaded files in modloader-download ==="
-          Get-ChildItem -Path "modloader-download" -Recurse | ForEach-Object { Write-Host $_.FullName }
+          Write-Host "=== Downloaded files in modloader-download (top level) ==="
+          Get-ChildItem -Path "modloader-download" | ForEach-Object { Write-Host $_.Name }
           
-          # 创建目标目录
-          New-Item -ItemType Directory -Path "ml-package" -Force | Out-Null
-          
-          # 查找zip文件
-          $zipFile = Get-ChildItem -Path "modloader-download" -Filter "*.zip" -Recurse | Select-Object -First 1
-          if ($zipFile) {
-            Write-Host "Found zip file: $($zipFile.FullName)"
-            Write-Host "Extracting to ml-package..."
-            Expand-Archive -Path $zipFile.FullName -DestinationPath "ml-package" -Force
+          # 检查 dist-insertTools 是否直接在 modloader-download 中
+          if (Test-Path "modloader-download/dist-insertTools") {
+            Write-Host ""
+            Write-Host "dist-insertTools found directly in modloader-download"
+            Write-Host "Renaming modloader-download to ml-package..."
+            Rename-Item -Path "modloader-download" -NewName "ml-package"
           } else {
-            # 检查是否直接下载了目录内容
-            $distInsertTools = Get-ChildItem -Path "modloader-download" -Directory -Filter "dist-insertTools" -Recurse | Select-Object -First 1
-            if ($distInsertTools) {
-              Write-Host "Found dist-insertTools directory, copying parent contents..."
-              $parentPath = Split-Path $distInsertTools.FullName -Parent
-              Copy-Item -Path "$parentPath/*" -Destination "ml-package" -Recurse -Force
-            } else {
-              Write-Host "No zip or known structure found, copying all files..."
-              Copy-Item -Path "modloader-download/*" -Destination "ml-package" -Recurse -Force
-            }
+            Write-Host "ERROR: dist-insertTools not found in modloader-download"
+            Write-Host "Full contents:"
+            Get-ChildItem -Path "modloader-download" -Recurse | Select-Object -First 50 | ForEach-Object { Write-Host $_.FullName }
+            exit 1
           }
           
           Write-Host ""
-          Write-Host "=== ModLoader package contents (ml-package) ==="
+          Write-Host "=== ml-package contents ==="
           Get-ChildItem -Path "ml-package" | ForEach-Object { Write-Host $_.Name }
           
-          # 验证关键目录存在
+          # 验证关键目录
           if (Test-Path "ml-package/dist-insertTools") {
-            Write-Host "✓ dist-insertTools found"
+            Write-Host "✓ dist-insertTools OK"
           } else {
-            Write-Host "✗ dist-insertTools NOT found"
-            Write-Host "Full tree:"
-            Get-ChildItem -Path "ml-package" -Recurse | Select-Object -First 50 | ForEach-Object { Write-Host $_.FullName }
+            Write-Host "✗ dist-insertTools MISSING"
             exit 1
           }
           
           if (Test-Path "ml-package/dist-BeforeSC2") {
-            Write-Host "✓ dist-BeforeSC2 found"
+            Write-Host "✓ dist-BeforeSC2 OK"
           } else {
-            Write-Host "✗ dist-BeforeSC2 NOT found"
+            Write-Host "✗ dist-BeforeSC2 MISSING"
+            exit 1
           }
 
       - name: Get ModLoader version
