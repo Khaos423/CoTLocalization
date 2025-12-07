@@ -54,134 +54,160 @@ jobs:
   package_mod:
     runs-on: windows-latest
     permissions:
-      contents: read
+      contents: write
     needs: build_i18n
     env:
       I18N_VERSION: ${{ needs.build_i18n.outputs.i18n_version }}
+      CHINESE_VERSION: auto-nightly
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get current date
+        id: date
+        shell: bash
+        run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+
       - name: Download built i18n.json
         uses: actions/download-artifact@v4
         with:
           name: i18n-${{ env.I18N_VERSION }}
           path: i18n-src
 
-      - name: Download latest ModI18N release zip
-        uses: robinraju/release-downloader@v1.10
-        with:
-          repository: BlackTeaPie/Course-of-Temptation-Chinese-Localization
-          latest: true
-          fileName: "ModI18N*.zip"
-          out-file-path: mod-src
-
-      - name: Prepare Mod workspace and version values
+      - name: Prepare version values
         shell: pwsh
         run: |
-          $asset = Get-ChildItem -Path "mod-src" -Filter "ModI18N*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $asset) { throw "No ModI18N zip asset downloaded." }
-          echo "MOD_ZIP=$($asset.FullName)" >> $env:GITHUB_ENV
-
-          # Derive versions strictly from I18N_VERSION
           $i18n = $env:I18N_VERSION
           $numeric = $i18n -replace '-[a-zA-Z]+$',''
           if ($i18n -match '-([a-zA-Z]+)$') { $letter = $Matches[1] } else { $letter = "" }
           if ($letter) { $withLetter = "$numeric-$letter" } else { $withLetter = $numeric }
-          $display = "v$numeric-chs-0.0.0"
 
-          echo "PKG_VER_NUMERIC=$numeric"       >> $env:GITHUB_ENV
-          echo "PKG_VER_LETTER=$letter"         >> $env:GITHUB_ENV
+          echo "GAME_VERSION=$numeric" >> $env:GITHUB_ENV
           echo "PKG_VER_WITH_LETTER=$withLetter" >> $env:GITHUB_ENV
-          echo "PKG_VER_DISPLAY=$display"       >> $env:GITHUB_ENV
 
           Write-Host "I18N_VERSION=$i18n"
-          Write-Host "PKG_VER_NUMERIC=$numeric"
-          Write-Host "PKG_VER_LETTER=$letter"
+          Write-Host "GAME_VERSION=$numeric"
           Write-Host "PKG_VER_WITH_LETTER=$withLetter"
-          Write-Host "PKG_VER_DISPLAY=$display"
 
-      - name: Extract ModI18N zip
+      ##### MOD LOADER & NODEJS #####
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18.x
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Download ModLoader Package from workflow artifact
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          repo: Lyoko-Jeremie/sugarcube-2-ModLoader
+          workflow: Build-ModLoader-Package.yml
+          workflow_conclusion: success
+          name: ModLoader Package
+          path: ModLoader
+          search_artifacts: true
+
+      - name: Verify ModLoader structure
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path "mod-work" -Force | Out-Null
-          Expand-Archive -Path "${{ env.MOD_ZIP }}" -DestinationPath "mod-work" -Force
-
-      - name: Replace i18n.json
-        shell: pwsh
-        run: |
-          $src = "i18n-src\i18n.json"
-          if (!(Test-Path $src)) { throw "Built i18n.json not found at $src" }
-          $targets = Get-ChildItem -Path "mod-work" -Filter "i18n.json" -Recurse
-          if (!$targets) { throw "No i18n.json found inside ModI18N zip" }
-          foreach ($t in $targets) {
-            Copy-Item -Path $src -Destination $t.FullName -Force
-            Write-Host "Replaced: $($t.FullName)"
+          Write-Host "=== ModLoader contents ==="
+          Get-ChildItem -Path "ModLoader" -Recurse | Select-Object -First 20 | ForEach-Object { Write-Host $_.FullName }
+          
+          if (!(Test-Path "ModLoader/dist-insertTools")) {
+            Write-Host "ERROR: dist-insertTools not found"
+            exit 1
           }
+          Write-Host "✓ ModLoader structure OK"
 
-      - name: Patch boot.json versions
-        shell: pwsh
+      - name: Checkout i18nMod source
+        uses: actions/checkout@v4
+        with:
+          repository: HCPTangHY/CoT_Mod_i18nMod
+          path: ModLoader/mod/i18n
+          ref: master
+
+      - name: Build i18n Mod
+        working-directory: ${{ github.workspace }}/ModLoader/mod/i18n
+        shell: bash
         run: |
-          $boot = Get-ChildItem -Path "mod-work" -Filter "boot.json" -Recurse | Select-Object -First 1
-          if (-not $boot) { throw "boot.json not found in extracted ModI18N" }
-          $content = Get-Content -LiteralPath $boot.FullName -Raw
+          echo "Installing dependencies..."
+          yarn install
+          echo "Building TypeScript..."
+          yarn run ts:build
+          echo "Building webpack..."
+          yarn run build:webpack
 
-          $verLetter = $env:PKG_VER_WITH_LETTER
-          $display = $env:PKG_VER_DISPLAY
-
-          # Replace the '=...' variant
-          $content = [regex]::Replace($content, '("version"\s*:\s*")=([^"]*)(")', { param($m) $m.Groups[1].Value + "=" + $verLetter + "-" + $m.Groups[3].Value })
-
-          # Replace the 'v...' variant (not starting with '=')
-          $content = [regex]::Replace($content, '("version"\s*:\s*")v[^"]*(")', { param($m) $m.Groups[1].Value + $display + $m.Groups[2].Value })
-
-          Set-Content -LiteralPath $boot.FullName -Value $content -Encoding utf8
-          Write-Host "Patched: $($boot.FullName)"
-
-      - name: Install 7-Zip
-        shell: pwsh
+      - name: Copy i18n.json to mod
+        shell: bash
         run: |
-          choco install 7zip -y
-          $env:Path += ";C:\Program Files\7-Zip"
-          7z i | Out-Null
+          cp "i18n-src/i18n.json" "ModLoader/mod/i18n/i18n.json"
+          echo "Copied i18n.json to ModLoader/mod/i18n/"
 
-      - name: Repack ModI18N zip (Deflate, level 6) with I18N versioned name
-        shell: pwsh
+      - name: Change Mod Version in boot.json (Nightly)
+        if: github.event_name == 'schedule'
+        working-directory: ${{ github.workspace }}
+        shell: bash
         run: |
-          $outDir = "dist"
-          New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-          $finalName = "ModI18N-$($env:I18N_VERSION).zip"
-          $outZip = Join-Path $outDir $finalName
-          if (Test-Path $outZip) { Remove-Item $outZip -Force }
+          if [ -f "change_mod_version.js" ]; then
+            node "change_mod_version.js" "ModLoader/mod/i18n/boot.json" "$CHINESE_VERSION" "$GAME_VERSION"
+          else
+            echo "change_mod_version.js not found, skipping version change"
+          fi
 
-          # Normalize internal root folder to ModI18N-$I18N_VERSION and flatten original root if needed
-          $stage = "stage"
-          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-          $rootName = "ModI18N-$($env:I18N_VERSION)"
-          $rootDir = Join-Path $stage $rootName
-          New-Item -ItemType Directory -Path $rootDir -Force | Out-Null
+      - name: Change Mod Version in boot.json (Manually)
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          if [ -f "change_mod_version.js" ]; then
+            node "change_mod_version.js" "ModLoader/mod/i18n/boot.json" "${{ github.event.inputs.chinese_version || env.CHINESE_VERSION }}" "$GAME_VERSION"
+          else
+            echo "change_mod_version.js not found, skipping version change"
+          fi
 
-          $items = Get-ChildItem -LiteralPath "mod-work" -Force
-          $dirs = $items | Where-Object { $_.PSIsContainer }
-          if ($dirs.Count -eq 1 -and ($items.Count -eq 1)) {
-            # Single root dir: move its children into $rootDir (flatten)
-            Get-ChildItem -LiteralPath $dirs[0].FullName -Force | ForEach-Object {
-              Move-Item -LiteralPath $_.FullName -Destination $rootDir -Force
-            }
-          } else {
-            # Multiple items: move them directly
-            $items | ForEach-Object {
-              Move-Item -LiteralPath $_.FullName -Destination $rootDir -Force
-            }
-          }
+      - name: Build i18n Mod Package
+        working-directory: ${{ github.workspace }}/ModLoader/mod/i18n
+        shell: bash
+        run: |
+          node "${{ github.workspace }}/ModLoader/dist-insertTools/packModZip.js" "boot.json"
 
-          Push-Location $stage
-          & 7z a -tzip -mx=6 -mm=Deflate -r "..\$outZip" "$rootName" | Write-Output
-          Pop-Location
-          echo "MOD_OUT_ZIP=$outZip" >> $env:GITHUB_ENV
-          echo "MOD_FINAL_NAME=$finalName" >> $env:GITHUB_ENV
-          Write-Host "Created: $outZip"
+      - name: Rename i18n Mod for upload (Nightly)
+        if: github.event_name == 'schedule'
+        shell: bash
+        run: |
+          mv "ModLoader/mod/i18n/ModI18N.mod.zip" "ModLoader/mod/i18n/ModI18N-$GAME_VERSION-chs-$CHINESE_VERSION.mod.zip"
+
+      - name: Rename i18n Mod for upload (Manually)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          CHINESE_VER="${{ github.event.inputs.chinese_version || env.CHINESE_VERSION }}"
+          mv "ModLoader/mod/i18n/ModI18N.mod.zip" "ModLoader/mod/i18n/ModI18N-$GAME_VERSION-chs-$CHINESE_VER.mod.zip"
 
       - name: Upload ModI18N zip artifact
         uses: actions/upload-artifact@v4
         with:
           name: ModI18N-${{ env.I18N_VERSION }}
-          path: ${{ env.MOD_OUT_ZIP }}
+          path: ModLoader/mod/i18n/ModI18N*.mod.zip
           if-no-files-found: error
+
+      - name: Release i18n Mod (Nightly)
+        uses: softprops/action-gh-release@v1
+        if: github.event_name == 'schedule'
+        with:
+          files: ModLoader/mod/i18n/ModI18N-${{ env.GAME_VERSION }}-chs-${{ env.CHINESE_VERSION }}.mod.zip
+          name: Auto Release nightly v${{ env.GAME_VERSION }}-chs-${{ env.CHINESE_VERSION }}-auto-${{ steps.date.outputs.date }}
+          tag_name: ${{ env.GAME_VERSION }}-chs-${{ env.CHINESE_VERSION }}-auto-${{ steps.date.outputs.date }}-${{ github.sha }}
+          body: Scheduled task on ${{ steps.date.outputs.date }}
+          prerelease: true
+
+      - name: Release i18n Mod (Manually)
+        uses: softprops/action-gh-release@v1
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          files: ModLoader/mod/i18n/ModI18N-${{ env.GAME_VERSION }}-chs-${{ github.event.inputs.chinese_version || env.CHINESE_VERSION }}.mod.zip
+          name: Release v${{ env.GAME_VERSION }}-chs-${{ github.event.inputs.chinese_version || env.CHINESE_VERSION }}
+          tag_name: ${{ env.GAME_VERSION }}-chs-${{ github.event.inputs.chinese_version || env.CHINESE_VERSION }}-${{ github.sha }}
+          body: release v${{ env.GAME_VERSION }}-chs-${{ github.event.inputs.chinese_version || env.CHINESE_VERSION }}
