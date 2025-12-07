@@ -660,22 +660,38 @@ jobs:
           print(f"APK已下载: {apk_path} ({file_size / 1024 / 1024:.2f} MB)")
           EOF
 
-      - name: Decompile APK
+      - name: Inspect downloaded APK
         run: |
-          echo "解包APK..."
-          apktool d apk-download/original.apk -o apk-decompiled -f
-          echo "APK已解包到 apk-decompiled/"
-          ls -la apk-decompiled/
+          echo "检查下载的APK文件..."
+          file apk-download/original.apk
+          echo ""
+          echo "APK文件头信息:"
+          xxd apk-download/original.apk | head -5
+          echo ""
+          echo "尝试列出APK内容 (使用unzip):"
+          unzip -l apk-download/original.apk | head -50
 
-      - name: Find and replace HTML file
+      - name: Extract APK using unzip
+        run: |
+          echo "使用unzip解压APK..."
+          mkdir -p apk-extracted
+          unzip -o apk-download/original.apk -d apk-extracted
+          echo ""
+          echo "APK内容结构:"
+          find apk-extracted -type f | head -50
+          echo ""
+          echo "查找所有html文件:"
+          find apk-extracted -name "*.html" -type f
+
+      - name: Find HTML file location
         run: |
           echo "查找HTML文件位置..."
           
           # 常见的HTML位置
           HTML_LOCATIONS=(
-            "apk-decompiled/assets/www/index.html"
-            "apk-decompiled/assets/index.html"
-            "apk-decompiled/assets/game/index.html"
+            "apk-extracted/assets/www/index.html"
+            "apk-extracted/assets/index.html"
+            "apk-extracted/assets/game/index.html"
           )
           
           TARGET_HTML=""
@@ -689,20 +705,28 @@ jobs:
           
           if [ -z "$TARGET_HTML" ]; then
             echo "尝试搜索index.html..."
-            TARGET_HTML=$(find apk-decompiled -name "index.html" -type f | head -1)
+            TARGET_HTML=$(find apk-extracted -name "index.html" -type f | head -1)
           fi
           
           if [ -z "$TARGET_HTML" ]; then
-            echo "❌ 未找到index.html"
+            echo "⚠️ 未找到index.html，尝试查找其他html文件..."
+            TARGET_HTML=$(find apk-extracted -name "*.html" -type f | head -1)
+          fi
+          
+          if [ -z "$TARGET_HTML" ]; then
+            echo "❌ 未找到任何HTML文件"
+            echo "完整的APK目录结构:"
+            find apk-extracted -type f
             exit 1
           fi
           
           echo "TARGET_HTML=$TARGET_HTML" >> $GITHUB_ENV
           echo "HTML文件位置: $TARGET_HTML"
           
-          # 获取目标目录
-          TARGET_DIR=$(dirname "$TARGET_HTML")
-          echo "TARGET_DIR=$TARGET_DIR" >> $GITHUB_ENV
+          # 获取相对路径 (去掉apk-extracted/前缀)
+          RELATIVE_PATH="${TARGET_HTML#apk-extracted/}"
+          echo "RELATIVE_HTML_PATH=$RELATIVE_PATH" >> $GITHUB_ENV
+          echo "相对路径: $RELATIVE_PATH"
 
       - name: Replace HTML with ModLoader version
         run: |
@@ -712,19 +736,21 @@ jobs:
           
           echo "ModLoader HTML: $MOD_HTML"
           echo "Polyfill HTML: $POLYFILL_HTML"
+          echo "目标HTML路径: $RELATIVE_HTML_PATH"
           
           # 创建两个版本的APK目录
-          cp -r apk-decompiled apk-decompiled-mod
-          cp -r apk-decompiled apk-decompiled-polyfill
+          cp -r apk-extracted apk-mod
+          cp -r apk-extracted apk-polyfill
           
           # 替换HTML文件
-          if [ -n "$MOD_HTML" ]; then
-            cp "$MOD_HTML" "apk-decompiled-mod/${TARGET_HTML#apk-decompiled/}"
+          if [ -n "$MOD_HTML" ] && [ -n "$RELATIVE_HTML_PATH" ]; then
+            cp "$MOD_HTML" "apk-mod/$RELATIVE_HTML_PATH"
             echo "已替换普通版HTML"
+            ls -la "apk-mod/$RELATIVE_HTML_PATH"
           fi
           
-          if [ -n "$POLYFILL_HTML" ]; then
-            cp "$POLYFILL_HTML" "apk-decompiled-polyfill/${TARGET_HTML#apk-decompiled/}"
+          if [ -n "$POLYFILL_HTML" ] && [ -n "$RELATIVE_HTML_PATH" ]; then
+            cp "$POLYFILL_HTML" "apk-polyfill/$RELATIVE_HTML_PATH"
             echo "已替换Polyfill版HTML"
           fi
 
@@ -732,13 +758,18 @@ jobs:
         run: |
           echo "重新打包APK (普通版)..."
           mkdir -p apk-output
-          apktool b apk-decompiled-mod -o apk-output/unsigned-mod.apk
+          cd apk-mod
+          zip -r ../apk-output/unsigned-mod.apk . -x "*.DS_Store"
+          cd ..
           echo "APK已重新打包"
+          ls -la apk-output/
 
       - name: Rebuild APK (polyfill version)
         run: |
           echo "重新打包APK (Polyfill版)..."
-          apktool b apk-decompiled-polyfill -o apk-output/unsigned-polyfill.apk
+          cd apk-polyfill
+          zip -r ../apk-output/unsigned-polyfill.apk . -x "*.DS_Store"
+          cd ..
           echo "APK已重新打包"
 
       - name: Sign APK with debug key
