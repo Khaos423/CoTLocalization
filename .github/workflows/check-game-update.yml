@@ -410,6 +410,26 @@ jobs:
             exit 1
           }
 
+      - name: Checkout SugarCube-2
+        uses: actions/checkout@v4
+        with:
+          repository: Lyoko-Jeremie/sugarcube-2_Vrelnir
+          path: SC2
+          ref: TS2
+
+      - name: Build SugarCube-2
+        working-directory: ${{ github.workspace }}/SC2
+        run: |
+          npm install
+          node build.js -d -u -b 2
+
+      - name: Copy SC2 format.js
+        shell: bash
+        run: |
+          cp SC2/build/twine2/sugarcube-2/format.js ml-package/format.js
+          echo "Copied format.js to ml-package/"
+          ls -la ml-package/format.js
+
       - name: Get ModLoader version
         id: modloader_version
         shell: bash
