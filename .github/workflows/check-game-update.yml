@@ -689,64 +689,32 @@ jobs:
           file apk-download/game.apk
           ls -la apk-download/
 
-      - name: Extract APK contents
+      - name: Find HTML path in APK
         run: |
-          echo "解压APK内容..."
-          mkdir -p apk-extracted
-          unzip -o apk-download/game.apk -d apk-extracted
-          echo ""
-          echo "APK内容结构:"
-          find apk-extracted -type d | head -30
-          echo ""
-          echo "查找所有html文件:"
-          find apk-extracted -name "*.html" -type f
-
-      - name: Find HTML file location
-        run: |
-          echo "查找HTML文件位置..."
+          echo "查找APK内HTML文件位置..."
           
-          # 常见的HTML位置
-          HTML_LOCATIONS=(
-            "apk-extracted/assets/www/index.html"
-            "apk-extracted/assets/index.html"
-            "apk-extracted/assets/game/index.html"
-          )
+          # 列出APK内容，查找HTML文件
+          unzip -l apk-download/game.apk | grep -E "\.html$" | head -10
           
-          TARGET_HTML=""
-          for loc in "${HTML_LOCATIONS[@]}"; do
-            if [ -f "$loc" ]; then
-              TARGET_HTML="$loc"
-              echo "找到HTML: $TARGET_HTML"
-              break
-            fi
-          done
+          # 获取HTML文件路径
+          HTML_PATH_IN_APK=$(unzip -l apk-download/game.apk | grep -oE "[^ ]+index\.html" | head -1)
           
-          if [ -z "$TARGET_HTML" ]; then
-            echo "尝试搜索index.html..."
-            TARGET_HTML=$(find apk-extracted -name "index.html" -type f | head -1)
+          if [ -z "$HTML_PATH_IN_APK" ]; then
+            echo "尝试查找任意html文件..."
+            HTML_PATH_IN_APK=$(unzip -l apk-download/game.apk | grep -oE "[^ ]+\.html" | head -1)
           fi
           
-          if [ -z "$TARGET_HTML" ]; then
-            echo "⚠️ 未找到index.html，尝试查找其他html文件..."
-            TARGET_HTML=$(find apk-extracted -name "*.html" -type f | head -1)
-          fi
-          
-          if [ -z "$TARGET_HTML" ]; then
-            echo "❌ 未找到任何HTML文件"
-            echo "完整的APK目录结构:"
-            find apk-extracted -type f
+          if [ -z "$HTML_PATH_IN_APK" ]; then
+            echo "❌ 未找到HTML文件"
+            echo "APK内容:"
+            unzip -l apk-download/game.apk
             exit 1
           fi
           
-          echo "TARGET_HTML=$TARGET_HTML" >> $GITHUB_ENV
-          echo "HTML文件位置: $TARGET_HTML"
-          
-          # 获取相对路径 (去掉apk-extracted/前缀)
-          RELATIVE_PATH="${TARGET_HTML#apk-extracted/}"
-          echo "RELATIVE_HTML_PATH=$RELATIVE_PATH" >> $GITHUB_ENV
-          echo "相对路径: $RELATIVE_PATH"
+          echo "HTML_PATH_IN_APK=$HTML_PATH_IN_APK" >> $GITHUB_ENV
+          echo "APK内HTML路径: $HTML_PATH_IN_APK"
 
-      - name: Replace HTML with ModLoader version
+      - name: Create modified APKs
         run: |
           # 找到ModLoader HTML (普通版和polyfill版)
           MOD_HTML=$(ls modloader-html/*.html | grep -v polyfill | head -1)
@@ -754,59 +722,91 @@ jobs:
           
           echo "ModLoader HTML: $MOD_HTML"
           echo "Polyfill HTML: $POLYFILL_HTML"
-          echo "目标HTML路径: $RELATIVE_HTML_PATH"
+          echo "APK内HTML路径: $HTML_PATH_IN_APK"
           
-          # 创建两个版本的APK目录
-          cp -r apk-extracted apk-mod
-          cp -r apk-extracted apk-polyfill
-          
-          # 替换HTML文件
-          if [ -n "$MOD_HTML" ] && [ -n "$RELATIVE_HTML_PATH" ]; then
-            cp "$MOD_HTML" "apk-mod/$RELATIVE_HTML_PATH"
-            echo "已替换普通版HTML"
-            ls -la "apk-mod/$RELATIVE_HTML_PATH"
-          fi
-          
-          if [ -n "$POLYFILL_HTML" ] && [ -n "$RELATIVE_HTML_PATH" ]; then
-            cp "$POLYFILL_HTML" "apk-polyfill/$RELATIVE_HTML_PATH"
-            echo "已替换Polyfill版HTML"
-          fi
-
-      - name: Rebuild APK (normal version)
-        run: |
-          echo "重新打包APK (普通版)..."
           mkdir -p apk-output
-          cd apk-mod
-          zip -r ../apk-output/unsigned-mod.apk . -x "*.DS_Store"
-          cd ..
-          echo "APK已重新打包"
+          
+          # 创建普通版APK
+          if [ -n "$MOD_HTML" ]; then
+            echo "创建普通版APK..."
+            cp apk-download/game.apk apk-output/mod.apk
+            
+            # 准备替换的HTML文件（需要放在正确的目录结构中）
+            HTML_DIR=$(dirname "$HTML_PATH_IN_APK")
+            mkdir -p "temp-html/$HTML_DIR"
+            cp "$MOD_HTML" "temp-html/$HTML_PATH_IN_APK"
+            
+            # 使用zip更新APK内的文件
+            cd temp-html
+            zip -u ../apk-output/mod.apk "$HTML_PATH_IN_APK"
+            cd ..
+            rm -rf temp-html
+            
+            # 删除旧签名
+            zip -d apk-output/mod.apk "META-INF/*" || true
+            
+            echo "普通版APK已创建"
+          fi
+          
+          # 创建polyfill版APK
+          if [ -n "$POLYFILL_HTML" ]; then
+            echo "创建Polyfill版APK..."
+            cp apk-download/game.apk apk-output/polyfill.apk
+            
+            # 准备替换的HTML文件
+            HTML_DIR=$(dirname "$HTML_PATH_IN_APK")
+            mkdir -p "temp-html/$HTML_DIR"
+            cp "$POLYFILL_HTML" "temp-html/$HTML_PATH_IN_APK"
+            
+            # 使用zip更新APK内的文件
+            cd temp-html
+            zip -u ../apk-output/polyfill.apk "$HTML_PATH_IN_APK"
+            cd ..
+            rm -rf temp-html
+            
+            # 删除旧签名
+            zip -d apk-output/polyfill.apk "META-INF/*" || true
+            
+            echo "Polyfill版APK已创建"
+          fi
+          
           ls -la apk-output/
 
-      - name: Rebuild APK (polyfill version)
-        run: |
-          echo "重新打包APK (Polyfill版)..."
-          cd apk-polyfill
-          zip -r ../apk-output/unsigned-polyfill.apk . -x "*.DS_Store"
-          cd ..
-          echo "APK已重新打包"
-
-      - name: Sign APK with debug key
+      - name: Sign APKs
         run: |
           mkdir -p apk-signed
           
           # 生成debug签名密钥
           keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           
-          # zipalign
-          zipalign -v 4 apk-output/unsigned-mod.apk apk-output/aligned-mod.apk
-          zipalign -v 4 apk-output/unsigned-polyfill.apk apk-output/aligned-polyfill.apk
+          # 处理普通版
+          if [ -f "apk-output/mod.apk" ]; then
+            echo "签名普通版APK..."
+            # zipalign
+            zipalign -v 4 apk-output/mod.apk apk-output/aligned-mod.apk
+            # 签名
+            apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --out "apk-signed/CoT-ModLoader-${VERSION}-${MODLOADER_VERSION}.apk" apk-output/aligned-mod.apk
+          fi
           
-          # 使用apksigner签名
-          apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --out "apk-signed/CoT-ModLoader-${VERSION}-${MODLOADER_VERSION}.apk" apk-output/aligned-mod.apk
-          apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --out "apk-signed/CoT-ModLoader-${VERSION}-${MODLOADER_VERSION}-polyfill.apk" apk-output/aligned-polyfill.apk
+          # 处理polyfill版
+          if [ -f "apk-output/polyfill.apk" ]; then
+            echo "签名Polyfill版APK..."
+            # zipalign
+            zipalign -v 4 apk-output/polyfill.apk apk-output/aligned-polyfill.apk
+            # 签名
+            apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --out "apk-signed/CoT-ModLoader-${VERSION}-${MODLOADER_VERSION}-polyfill.apk" apk-output/aligned-polyfill.apk
+          fi
           
-          echo "APK已签名"
+          echo "APK签名完成"
           ls -la apk-signed/
+          
+          # 验证签名
+          echo ""
+          echo "验证APK签名..."
+          for apk in apk-signed/*.apk; do
+            echo "验证: $apk"
+            apksigner verify --verbose "$apk" || true
+          done
 
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v4
