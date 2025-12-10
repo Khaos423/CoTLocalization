@@ -274,7 +274,7 @@ class Replacer:
                                 logger.error(f"{d['key']} \\n error!")
                                 i18n['typeB']['TypeBOutputText'].append({
                                     "pos": pos + emojiDiffIdx,
-                                    "f": d['original'],
+                                    "f": d['original'].replace("▲","\\n"),
                                     "t": d['translation'].replace("▲","\\n"),
                                     "fileName": passagename + ".js",
                                     "js": True
@@ -296,7 +296,7 @@ class Replacer:
                                             break
                                     i18n['typeB']['TypeBOutputText'].append({
                                         "pos": linepos + lineidx + emojiDiffIdx,
-                                        "f": orilist[i].strip(),
+                                        "f": orilist[i].strip().replace("▲","\\n"),
                                         "t": translist[i].strip().replace("▲","\\n"),
                                         "fileName": passagename + ".js",
                                         "js": True
