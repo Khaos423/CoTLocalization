@@ -1,12 +1,25 @@
 /**
  * 修改 ModI18N 的 boot.json 中的版本信息
- * 
+ *
  * 用法: node change_mod_version.js <boot.json路径> <chinese_version> <game_version>
  * 例如: node change_mod_version.js ModLoader/mod/i18n/boot.json auto-nightly 0.5.2.6
  */
 
 const fs = require('fs');
 const path = require('path');
+
+/**
+ * 将版本号格式化为带连字符的格式
+ * 例如: 0.7.4c -> 0.7.4-c, 0.5.5.8 -> 0.5.5.8
+ */
+function formatVersionWithHyphen(version) {
+    // 匹配版本号末尾的字母后缀（如 0.7.4c 中的 c）
+    const match = version.match(/^([\d.]+)([a-zA-Z]+)$/);
+    if (match) {
+        return `${match[1]}-${match[2]}`;
+    }
+    return version;
+}
 
 function main() {
     // 检查参数
@@ -37,8 +50,8 @@ function main() {
         const bootJson = JSON.parse(content);
 
         // 修改版本信息
-        // 格式: v{gameVersion}-chs-{chineseVersion}
-        const newVersion = `v${gameVersion}-chs-${chineseVersion}`;
+        // 格式: v{gameVersion} (不再包含 chs-xxx 后缀)
+        const newVersion = `v${gameVersion}`;
         
         if (bootJson.version) {
             console.log(`原版本: ${bootJson.version}`);
@@ -49,6 +62,28 @@ function main() {
             bootJson.version = newVersion;
             console.log(`已添加 version 字段: ${bootJson.version}`);
         }
+
+        // 更新 dependenceInfo 中 GameVersion 的版本
+        if (bootJson.dependenceInfo && Array.isArray(bootJson.dependenceInfo)) {
+            const gameVersionDep = bootJson.dependenceInfo.find(dep => dep.modName === 'GameVersion');
+            if (gameVersionDep) {
+                console.log(`原 GameVersion 依赖版本: ${gameVersionDep.version}`);
+                // 将版本号格式化为带连字符的格式 (如 0.7.4c -> 0.7.4-c)
+                const formattedVersion = formatVersionWithHyphen(gameVersion);
+                gameVersionDep.version = `=${formattedVersion}`;
+                console.log(`新 GameVersion 依赖版本: ${gameVersionDep.version}`);
+            } else {
+                console.log('警告: dependenceInfo 中未找到 GameVersion 依赖');
+            }
+        }
+
+        // 更新 imgFileList
+        console.log(`原 imgFileList: ${JSON.stringify(bootJson.imgFileList)}`);
+        bootJson.imgFileList = [
+            "res/img/map_univ_big.png",
+            "res/img/map_town_big.png"
+        ];
+        console.log(`新 imgFileList: ${JSON.stringify(bootJson.imgFileList)}`);
 
         // 写回文件
         fs.writeFileSync(bootJsonPath, JSON.stringify(bootJson, null, 2), 'utf-8');

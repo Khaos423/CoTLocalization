@@ -17,3 +17,9 @@ out.log
 *.apk
 *.json
 !modloader/*.json
+
+# APK signing keys - DO NOT COMMIT
+*.keystore
+*.keystore.b64
+*.jks
+apk-signing-secrets.txt
