@@ -170,7 +170,7 @@ class Replacer:
             m = re.findall(r'&lt;&lt;POS:(\d+)&gt;&gt;', ctx)
             return int(m[-1]) if m else None
         
-        def _is_lack_quotes(line_zh: str, line_en: str, line_key: str, version):
+        def _is_lack_quotes(line_zh: str, line_en: str, version):
             """引号大逃杀"""
             q_patterns = [r'[\u201c\u201d"]', r'`']
             q_chinese = ['双引号', '反引号']
@@ -179,7 +179,7 @@ class Replacer:
                 quotes_zh = len(re.findall(q_pattern, line_zh))
                 if (quotes_en - quotes_zh) % 2 != 0:
                     logger.error(
-                        f"\t!!! 可能的{q_chinese[idx_]}错误： https://paratranz.cn/projects/11363/strings?key={quote(line_key)}&filename={version}")
+                        f"\t!!! 可能的{q_chinese[idx_]}错误： https://paratranz.cn/projects/11363/strings?text={quote(line_en)}&filename={version}")
 
         for root, dirs, files in os.walk(self.transPath):
             for file in files:
@@ -243,7 +243,7 @@ class Replacer:
 
                             orilist = re.split(r'(?<!\\)\n', d['original'])
                             translist = re.split(r'(?<!\\)\n', d['translation'])
-                            _is_lack_quotes(d['translation'], d['original'], d['key'], self.version)
+                            _is_lack_quotes(d['translation'], d['original'], self.version)
                             if 'StreamingWidgets' in passagename:print(pos,emojiDiffIdx)
                             if len(orilist) != len(translist):
                                 logger.error(f"{d['key']} \\n error!")
@@ -283,7 +283,7 @@ class Replacer:
 
                             orilist = re.split(r'(?<!\\)\n', d['original'])
                             translist = re.split(r'(?<!\\)\n', d['translation'])
-                            _is_lack_quotes(d['translation'], d['original'], d['key'], self.version)
+                            _is_lack_quotes(d['translation'], d['original'], self.version)
                             if len(orilist) != len(translist):
                                 logger.error(f"{d['key']} \\n error!")
                                 i18n['typeB']['TypeBOutputText'].append({
