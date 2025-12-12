@@ -1002,13 +1002,15 @@ jobs:
           echo "res/img内容:"
           ls -la ModLoader/mod/GameOriginalImagePack/res/img/ 2>/dev/null | head -10
 
-      - name: Generate boot.json using bootJsonFillTool
+      - name: Generate boot.json for CoT
         working-directory: ${{ github.workspace }}/ModLoader/mod/GameOriginalImagePack
         run: |
           echo "Game Version: $VERSION"
-          # 使用 GameOriginalImagePackMod 自带的工具生成 boot.json
-          # bootJsonFillTool.js <template> <imgDir> <version>
-          node dist-tools/bootJsonFillTool.js "bootTemplate.json" "res" "$VERSION"
+          
+          # 使用本地 Python 脚本生成 boot.json
+          # 扫描 res 目录，生成 res/img/xxx.png 格式的路径
+          # --extras 会包含样式、脚本等额外文件
+          python "${{ github.workspace }}/scripts/generate_image_pack_boot.py" "res" "$VERSION" "boot.json" --extras
           
           echo ""
           echo "boot.json content (前50行):"
