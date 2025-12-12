@@ -1098,6 +1098,8 @@ jobs:
           
           # 从文件名提取 ModLoader 版本
           HTML_FILE=$(ls html-temp/*.html 2>/dev/null | grep -v polyfill | head -1)
+          POLYFILL_FILE=$(ls html-temp/*.html 2>/dev/null | grep polyfill | head -1)
+          
           if [ -n "$HTML_FILE" ]; then
             BASENAME=$(basename "$HTML_FILE" .html)
             ML_VER=$(echo "$BASENAME" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1)
@@ -1108,14 +1110,29 @@ jobs:
             echo "MODLOADER_VERSION=unknown" >> $GITHUB_ENV
           fi
           
-          # 将 HTML 文件打包为 zip
-          # VERSION 格式: 0.7.3g, ML_VER 格式: 2.33.2
-          if [ -n "$(ls html-temp/*.html 2>/dev/null)" ]; then
-            ZIP_NAME="CoT-ModLoader-v${VERSION}-v${ML_VER}.zip"
+          # 处理 VERSION：如果已经有 v 前缀则不加，否则加上
+          # VERSION 可能是 "v0.7.4d" 或 "0.7.4d"
+          GAME_VER="${VERSION}"
+          if [[ "$GAME_VER" != v* ]]; then
+            GAME_VER="v${GAME_VER}"
+          fi
+          
+          # 将普通版 HTML 打包为 zip
+          if [ -n "$HTML_FILE" ]; then
+            ZIP_NAME="CoT-ModLoader-${GAME_VER}-v${ML_VER}.zip"
             cd html-temp
-            zip "../release-files/${ZIP_NAME}" *.html
+            zip "../release-files/${ZIP_NAME}" "$(basename "$HTML_FILE")"
             cd ..
-            echo "Created HTML zip: ${ZIP_NAME}"
+            echo "Created standard HTML zip: ${ZIP_NAME}"
+          fi
+          
+          # 将 polyfill 版 HTML 打包为 zip
+          if [ -n "$POLYFILL_FILE" ]; then
+            ZIP_NAME="CoT-ModLoader-${GAME_VER}-v${ML_VER}-polyfill.zip"
+            cd html-temp
+            zip "../release-files/${ZIP_NAME}" "$(basename "$POLYFILL_FILE")"
+            cd ..
+            echo "Created polyfill HTML zip: ${ZIP_NAME}"
           fi
           
           # 复制所有 APK 文件
@@ -1154,7 +1171,8 @@ jobs:
             ### 📦 包含内容
             
             #### HTML 版本
-            - `CoT-ModLoader-v*-v*.zip` - 包含标准版和兼容版 HTML
+            - `CoT-ModLoader-v*-v*.zip` - 标准版 HTML
+            - `CoT-ModLoader-v*-v*-polyfill.zip` - 兼容版 HTML（适用于旧浏览器）
             
             #### Android APK
             - `CoT-ModLoader-*.apk` - 标准版 APK
