@@ -168,6 +168,23 @@ class Replacer:
                 return None
             m = re.findall(r'&lt;&lt;POS:(\d+)&gt;&gt;', ctx)
             return int(m[-1]) if m else None
+        
+        def _is_lack_quotes(line_zh: str, line_en: str, line_key: str, version):
+            """引号大逃杀"""
+            q_patterns = ["""r'[\u201c\u201d"]',""" r'\'', r'`']
+            q_chinese = ["""'双引号',""" '单引号', '反引号']
+            for idx_, q_pattern in enumerate(q_patterns):
+                quotes_en = re.findall(q_pattern, line_en)
+                quotes_zh = re.findall(q_pattern, line_zh)
+                if q_pattern == r'\'':
+                    quotes_en_s = re.findall(r'\b[a-zA-Z]\'[a-zA-Z]\b', line_en)
+                    if (len(quotes_en) - len(quotes_en_s) - len(quotes_zh)) % 2 != 0:
+                        logger.error(
+                            f"\t!!! 可能的{q_chinese[idx_]}错误：{line_en} | {line_zh} | https://paratranz.cn/projects/11363/&filename={version}&strings?text={line_key}")
+                else:
+                    if (len(quotes_en) - len(quotes_zh)) % 2 != 0:
+                        logger.error(
+                            f"\t!!! 可能的{q_chinese[idx_]}错误：{line_en} | {line_zh} | https://paratranz.cn/projects/11363/&filename={version}&strings?text={line_key}")
 
         for root, dirs, files in os.walk(self.transPath):
             for file in files:
@@ -231,6 +248,7 @@ class Replacer:
 
                             orilist = re.split(r'(?<!\\)\n', d['original'])
                             translist = re.split(r'(?<!\\)\n', d['translation'])
+                            _is_lack_quotes(d['translation'], d['original'], d['key'], self.version)
                             if 'StreamingWidgets' in passagename:print(pos,emojiDiffIdx)
                             if len(orilist) != len(translist):
                                 logger.error(f"{d['key']} \\n error!")
@@ -270,6 +288,7 @@ class Replacer:
 
                             orilist = re.split(r'(?<!\\)\n', d['original'])
                             translist = re.split(r'(?<!\\)\n', d['translation'])
+                            _is_lack_quotes(d['translation'], d['original'], d['key'], self.version)
                             if len(orilist) != len(translist):
                                 logger.error(f"{d['key']} \\n error!")
                                 i18n['typeB']['TypeBOutputText'].append({
