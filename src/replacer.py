@@ -171,8 +171,8 @@ class Replacer:
         
         def _is_lack_quotes(line_zh: str, line_en: str, line_key: str, version):
             """引号大逃杀"""
-            q_patterns = ["""r'[\u201c\u201d"]',""" r'\'', r'`']
-            q_chinese = ["""'双引号',""" '单引号', '反引号']
+            q_patterns = [r'[\u201c\u201d"]', r'\'', r'`']
+            q_chinese = ['双引号', '单引号', '反引号']
             for idx_, q_pattern in enumerate(q_patterns):
                 quotes_en = re.findall(q_pattern, line_en)
                 quotes_zh = re.findall(q_pattern, line_zh)
