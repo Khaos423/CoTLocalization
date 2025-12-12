@@ -172,15 +172,11 @@ class Replacer:
         
         def _is_lack_quotes(line_zh: str, line_en: str, line_key: str, version):
             """引号大逃杀"""
-            q_patterns = [r'[\u201c\u201d"]', r'\'', r'`']
-            q_chinese = ['双引号', '单引号', '反引号']
+            q_patterns = [r'[\u201c\u201d"]', r'`']
+            q_chinese = ['双引号', '反引号']
             for idx_, q_pattern in enumerate(q_patterns):
                 quotes_en = len(re.findall(q_pattern, line_en))
                 quotes_zh = len(re.findall(q_pattern, line_zh))
-                if q_pattern == r'\'':
-                    quotes_en = quotes_en - len(re.findall(r'\b[a-zA-Z]\'[a-zA-Z]\b', line_en))
-                    if quotes_en == 0:
-                        continue
                 if (quotes_en - quotes_zh) % 2 != 0:
                     logger.error(
                         f"\t!!! 可能的{q_chinese[idx_]}错误： https://paratranz.cn/projects/11363/strings?key={quote(line_key)}&filename={version}")
