@@ -902,7 +902,7 @@ jobs:
           print(f"APK已下载: {apk_path} ({file_size / 1024 / 1024:.2f} MB)")
           EOF
 
-      - name: Extract APK and get img directory
+      - name: Extract APK and get res directory
         run: |
           echo "检查下载的文件..."
           file apk-download/original.apk
@@ -922,43 +922,37 @@ jobs:
           
           echo "找到真正的APK: $REAL_APK"
           
-          # 解压APK获取res/img目录（CoT的图片在res/img目录）
-          echo "解压APK获取res/img目录..."
+          # 解压APK获取res目录
+          echo "解压APK..."
           mkdir -p apk-contents
           unzip -o "$REAL_APK" -d apk-contents
           
-          # 查找res/img目录（CoT游戏的图片路径）
-          echo "查找res/img目录..."
-          RES_IMG_DIR=$(find apk-contents -type d -path "*/res/img" | head -1)
+          # 查找res目录（CoT游戏的资源路径）
+          echo "查找res目录..."
+          RES_DIR=$(find apk-contents -type d -name "res" -path "*assets*" | head -1)
           
-          if [ -z "$RES_IMG_DIR" ]; then
-            echo "尝试查找assets/www/res/img..."
-            RES_IMG_DIR=$(find apk-contents -type d -name "img" -path "*res*" | head -1)
+          if [ -z "$RES_DIR" ]; then
+            echo "尝试其他路径..."
+            RES_DIR=$(find apk-contents -type d -path "*/www/res" | head -1)
           fi
           
-          if [ -z "$RES_IMG_DIR" ]; then
-            echo "❌ 未找到res/img目录"
+          if [ -z "$RES_DIR" ]; then
+            echo "❌ 未找到res目录"
             echo "APK内容结构:"
             find apk-contents -type d | head -50
             exit 1
           fi
           
-          echo "找到res/img目录: $RES_IMG_DIR"
+          echo "找到res目录: $RES_DIR"
           
-          # 复制res目录结构（保持res/img的路径结构）
-          RES_DIR=$(dirname "$RES_IMG_DIR")
-          echo "RES目录: $RES_DIR"
-          
+          # 复制res目录
           mkdir -p game-res
-          cp -r "$RES_DIR"/* game-res/ 2>/dev/null || cp -r "$RES_IMG_DIR" game-res/img
+          cp -r "$RES_DIR" game-res/
           
           echo "res目录内容:"
-          ls -la game-res/ | head -20
+          ls -la game-res/res/ | head -20
           echo ""
-          echo "res/img目录内容:"
-          ls -la game-res/img/ 2>/dev/null | head -20 || echo "img目录可能在不同位置"
-          echo "..."
-          echo "总图片文件数: $(find game-res -type f -name "*.png" -o -name "*.jpg" -o -name "*.gif" | wc -l)"
+          echo "总图片文件数: $(find game-res -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.gif" -o -name "*.webp" \) | wc -l)"
 
       - name: Download ModLoader Package
         uses: dawidd6/action-download-artifact@v3
@@ -982,28 +976,39 @@ jobs:
           fi
           echo "✓ ModLoader structure OK"
 
-      - name: Setup GameOriginalImagePack directory
+      - name: Checkout GameOriginalImagePackMod
+        uses: actions/checkout@v4
+        with:
+          repository: Lyoko-Jeremie/GameOriginalImagePackMod
+          path: ModLoader/mod/GameOriginalImagePack
+          ref: master
+
+      - name: Build GameOriginalImagePack
+        working-directory: ${{ github.workspace }}/ModLoader/mod/GameOriginalImagePack
         run: |
-          mkdir -p ModLoader/mod/GameOriginalImagePack
-          echo "GameOriginalImagePack目录已创建"
+          yarn install
+          yarn run build:ts
+          yarn run build:webpack
+          yarn run build:tools
 
       - name: Copy res to GameOriginalImagePack
         run: |
           echo "Copying res directory to GameOriginalImagePack..."
-          # 复制res目录（保持res/img的路径结构，用于imgFileList）
-          cp -r game-res ModLoader/mod/GameOriginalImagePack/res
+          # 复制res目录（CoT的路径是res/img/xxx.png）
+          cp -r game-res/res ModLoader/mod/GameOriginalImagePack/
           echo "res目录已复制"
           ls -la ModLoader/mod/GameOriginalImagePack/
           echo ""
           echo "res/img内容:"
           ls -la ModLoader/mod/GameOriginalImagePack/res/img/ 2>/dev/null | head -10
 
-      - name: Generate boot.json for CoT
+      - name: Generate boot.json using bootJsonFillTool
         working-directory: ${{ github.workspace }}/ModLoader/mod/GameOriginalImagePack
         run: |
           echo "Game Version: $VERSION"
-          # 使用本地脚本生成 boot.json
-          python "${{ github.workspace }}/scripts/generate_image_pack_boot.py" "res" "$VERSION" "boot.json"
+          # 使用 GameOriginalImagePackMod 自带的工具生成 boot.json
+          # bootJsonFillTool.js <template> <imgDir> <version>
+          node dist-tools/bootJsonFillTool.js "bootTemplate.json" "res" "$VERSION"
           
           echo ""
           echo "boot.json content (前50行):"
@@ -1019,7 +1024,7 @@ jobs:
           node "${{ github.workspace }}/ModLoader/dist-insertTools/packModZip.js" "boot.json"
           
           echo "Mod package created:"
-          ls -la *.mod.zip || ls -la *.zip || echo "No zip files found"
+          ls -la *.mod.zip 2>/dev/null || ls -la *.zip 2>/dev/null || echo "No zip files found"
 
       - name: Prepare output
         run: |
