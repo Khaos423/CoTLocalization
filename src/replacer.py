@@ -179,6 +179,8 @@ class Replacer:
                 quotes_zh = len(re.findall(q_pattern, line_zh))
                 if q_pattern == r'\'':
                     quotes_en = quotes_en - len(re.findall(r'\b[a-zA-Z]\'[a-zA-Z]\b', line_en))
+                    if quotes_en == 0:
+                        continue
                 if (quotes_en - quotes_zh) % 2 != 0:
                     logger.error(
                         f"\t!!! 可能的{q_chinese[idx_]}错误： https://paratranz.cn/projects/11363/strings?key={quote(line_key)}&filename={version}")
