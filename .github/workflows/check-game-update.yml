@@ -922,32 +922,43 @@ jobs:
           
           echo "找到真正的APK: $REAL_APK"
           
-          # 解压APK获取img目录
-          echo "解压APK获取img目录..."
+          # 解压APK获取res/img目录（CoT的图片在res/img目录）
+          echo "解压APK获取res/img目录..."
           mkdir -p apk-contents
           unzip -o "$REAL_APK" -d apk-contents
           
-          # 查找img目录
-          echo "查找img目录..."
-          IMG_DIR=$(find apk-contents -type d -name "img" | head -1)
+          # 查找res/img目录（CoT游戏的图片路径）
+          echo "查找res/img目录..."
+          RES_IMG_DIR=$(find apk-contents -type d -path "*/res/img" | head -1)
           
-          if [ -z "$IMG_DIR" ]; then
-            echo "❌ 未找到img目录"
+          if [ -z "$RES_IMG_DIR" ]; then
+            echo "尝试查找assets/www/res/img..."
+            RES_IMG_DIR=$(find apk-contents -type d -name "img" -path "*res*" | head -1)
+          fi
+          
+          if [ -z "$RES_IMG_DIR" ]; then
+            echo "❌ 未找到res/img目录"
             echo "APK内容结构:"
-            find apk-contents -type d | head -30
+            find apk-contents -type d | head -50
             exit 1
           fi
           
-          echo "找到img目录: $IMG_DIR"
+          echo "找到res/img目录: $RES_IMG_DIR"
           
-          # 移动img目录到工作区
-          mkdir -p game-img
-          cp -r "$IMG_DIR"/* game-img/ || cp -r "$IMG_DIR" game-img/
+          # 复制res目录结构（保持res/img的路径结构）
+          RES_DIR=$(dirname "$RES_IMG_DIR")
+          echo "RES目录: $RES_DIR"
           
-          echo "img目录内容:"
-          ls -la game-img/ | head -20
+          mkdir -p game-res
+          cp -r "$RES_DIR"/* game-res/ 2>/dev/null || cp -r "$RES_IMG_DIR" game-res/img
+          
+          echo "res目录内容:"
+          ls -la game-res/ | head -20
+          echo ""
+          echo "res/img目录内容:"
+          ls -la game-res/img/ 2>/dev/null | head -20 || echo "img目录可能在不同位置"
           echo "..."
-          echo "总文件数: $(find game-img -type f | wc -l)"
+          echo "总图片文件数: $(find game-res -type f -name "*.png" -o -name "*.jpg" -o -name "*.gif" | wc -l)"
 
       - name: Download ModLoader Package
         uses: dawidd6/action-download-artifact@v3
@@ -971,72 +982,39 @@ jobs:
           fi
           echo "✓ ModLoader structure OK"
 
-      - name: Checkout GameOriginalImagePackMod
-        uses: actions/checkout@v4
-        with:
-          repository: Lyoko-Jeremie/GameOriginalImagePackMod
-          path: ModLoader/mod/GameOriginalImagePack
-          ref: master
-
-      - name: Build GameOriginalImagePack tools
-        working-directory: ${{ github.workspace }}/ModLoader/mod/GameOriginalImagePack
-        env:
-          YARN_ENABLE_IMMUTABLE_INSTALLS: false
+      - name: Setup GameOriginalImagePack directory
         run: |
-          echo "Installing dependencies..."
-          yarn install
-          echo "Building TypeScript..."
-          yarn run build:ts || echo "build:ts not found, skipping"
-          echo "Building webpack..."
-          yarn run build:webpack || echo "build:webpack not found, skipping"
-          echo "Building tools..."
-          yarn run build:tools || echo "build:tools not found, skipping"
+          mkdir -p ModLoader/mod/GameOriginalImagePack
+          echo "GameOriginalImagePack目录已创建"
 
-      - name: Copy img to GameOriginalImagePack
+      - name: Copy res to GameOriginalImagePack
         run: |
-          echo "Copying img directory to GameOriginalImagePack..."
-          cp -r game-img ModLoader/mod/GameOriginalImagePack/img
-          echo "img目录已复制"
+          echo "Copying res directory to GameOriginalImagePack..."
+          # 复制res目录（保持res/img的路径结构，用于imgFileList）
+          cp -r game-res ModLoader/mod/GameOriginalImagePack/res
+          echo "res目录已复制"
           ls -la ModLoader/mod/GameOriginalImagePack/
+          echo ""
+          echo "res/img内容:"
+          ls -la ModLoader/mod/GameOriginalImagePack/res/img/ 2>/dev/null | head -10
 
-      - name: Generate boot.json and build mod
+      - name: Generate boot.json for CoT
         working-directory: ${{ github.workspace }}/ModLoader/mod/GameOriginalImagePack
         run: |
           echo "Game Version: $VERSION"
-          
-          # 检查bootJsonFillTool是否存在
-          if [ -f "dist-tools/bootJsonFillTool.js" ]; then
-            echo "Using bootJsonFillTool to generate boot.json..."
-            node "dist-tools/bootJsonFillTool.js" "bootTemplate.json" "img" "$VERSION"
-          elif [ -f "bootTemplate.json" ]; then
-            echo "bootJsonFillTool not found, creating boot.json manually..."
-            # 手动创建boot.json，使用游戏版本作为mod版本
-            cat bootTemplate.json | sed "s/\${GameVersion}/$VERSION/g" > boot.json
-          else
-            echo "Creating default boot.json with game version..."
-            # 使用游戏版本作为mod版本
-            cat > boot.json << BOOTJSON
-          {
-            "name": "GameOriginalImagePack",
-            "version": "$VERSION",
-            "gameVersion": "$VERSION",
-            "description": "Original game images for Course of Temptation",
-            "author": "CoT Team",
-            "dependenceInfo": [
-              {
-                "modName": "ModLoader DoL ImageLoaderHook",
-                "version": "^1.0.0"
-              }
-            ],
-            "imgFileList": []
-          }
-          BOOTJSON
-          fi
-          
-          echo "boot.json content:"
-          cat boot.json | head -30
+          # 使用本地脚本生成 boot.json
+          python "${{ github.workspace }}/scripts/generate_image_pack_boot.py" "res" "$VERSION" "boot.json"
           
           echo ""
+          echo "boot.json content (前50行):"
+          head -50 boot.json
+          echo "..."
+          echo "boot.json content (后10行):"
+          tail -10 boot.json
+
+      - name: Pack mod zip
+        working-directory: ${{ github.workspace }}/ModLoader/mod/GameOriginalImagePack
+        run: |
           echo "Packing mod..."
           node "${{ github.workspace }}/ModLoader/dist-insertTools/packModZip.js" "boot.json"
           
@@ -1087,15 +1065,51 @@ jobs:
           path: all-artifacts
           merge-multiple: false
 
+      - name: Download ModI18N from build-i18n workflow
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          repo: ${{ github.repository }}
+          workflow: build-i18n.yml
+          workflow_conclusion: success
+          name_is_regexp: true
+          name: ModI18N-.*
+          path: i18n-artifact
+          search_artifacts: true
+        continue-on-error: true
+
       - name: Prepare release files
         run: |
           mkdir -p release-files
+          mkdir -p html-temp
           
           echo "=== Downloaded artifacts ==="
           find all-artifacts -type f | head -50
           
-          # 复制所有 HTML 文件
-          find all-artifacts -name "*.html" -exec cp {} release-files/ \;
+          # 复制所有 HTML 文件到临时目录
+          find all-artifacts -name "*.html" -exec cp {} html-temp/ \;
+          
+          # 从文件名提取 ModLoader 版本
+          HTML_FILE=$(ls html-temp/*.html 2>/dev/null | grep -v polyfill | head -1)
+          if [ -n "$HTML_FILE" ]; then
+            BASENAME=$(basename "$HTML_FILE" .html)
+            ML_VER=$(echo "$BASENAME" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1)
+            echo "MODLOADER_VERSION=$ML_VER" >> $GITHUB_ENV
+            echo "Detected ModLoader version: $ML_VER"
+          else
+            ML_VER="unknown"
+            echo "MODLOADER_VERSION=unknown" >> $GITHUB_ENV
+          fi
+          
+          # 将 HTML 文件打包为 zip
+          # VERSION 格式: 0.7.3g, ML_VER 格式: 2.33.2
+          if [ -n "$(ls html-temp/*.html 2>/dev/null)" ]; then
+            ZIP_NAME="CoT-ModLoader-v${VERSION}-v${ML_VER}.zip"
+            cd html-temp
+            zip "../release-files/${ZIP_NAME}" *.html
+            cd ..
+            echo "Created HTML zip: ${ZIP_NAME}"
+          fi
           
           # 复制所有 APK 文件
           find all-artifacts -name "*.apk" -exec cp {} release-files/ \;
@@ -1103,19 +1117,14 @@ jobs:
           # 复制所有 mod.zip 文件
           find all-artifacts -name "*.mod.zip" -exec cp {} release-files/ \;
           
+          # 复制 ModI18N 文件（如果存在）
+          if [ -d "i18n-artifact" ]; then
+            find i18n-artifact -name "*.mod.zip" -exec cp {} release-files/ \;
+            echo "ModI18N files copied"
+          fi
+          
           echo "=== Release files ==="
           ls -la release-files/
-          
-          # 从文件名提取 ModLoader 版本
-          HTML_FILE=$(ls release-files/*.html 2>/dev/null | grep -v polyfill | head -1)
-          if [ -n "$HTML_FILE" ]; then
-            BASENAME=$(basename "$HTML_FILE" .html)
-            ML_VER=$(echo "$BASENAME" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1)
-            echo "MODLOADER_VERSION=$ML_VER" >> $GITHUB_ENV
-            echo "Detected ModLoader version: $ML_VER"
-          else
-            echo "MODLOADER_VERSION=unknown" >> $GITHUB_ENV
-          fi
 
       - name: Get current date
         id: date
@@ -1138,8 +1147,7 @@ jobs:
             ### 📦 包含内容
             
             #### HTML 版本
-            - `CourseOfTemptation-ModLoader-*.html` - 标准版
-            - `CourseOfTemptation-ModLoader-*-polyfill.html` - 兼容版（适用于旧浏览器）
+            - `CoT-ModLoader-v*-v*.zip` - 包含标准版和兼容版 HTML
             
             #### Android APK
             - `CoT-ModLoader-*.apk` - 标准版 APK
@@ -1151,4 +1159,7 @@ jobs:
             - `GameOriginalImagePack-*.mod.zip` - 原版游戏图片包
             
             需要 ModLoader DoL ImageLoaderHook 才能使用图片包
+            
+            #### 汉化包
+            - `ModI18N-*.mod.zip` - 中文汉化包（如果可用）
           prerelease: true
