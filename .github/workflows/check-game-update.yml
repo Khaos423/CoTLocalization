@@ -473,8 +473,8 @@ jobs:
             ML_VERSION="unknown"
           fi
           
-          echo "ModLoader Version: v$ML_VERSION"
-          echo "MODLOADER_VERSION=v$ML_VERSION" >> $GITHUB_ENV
+          echo "ModLoader Version: $ML_VERSION"
+          echo "MODLOADER_VERSION=$ML_VERSION" >> $GITHUB_ENV
 
       - name: Copy modList.json
         shell: bash
@@ -567,23 +567,6 @@ jobs:
           path: final-output/*.html
           if-no-files-found: warn
 
-      - name: Get current date
-        id: date
-        shell: bash
-        run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
-
-      - name: Release ModLoader HTML
-        uses: softprops/action-gh-release@v1
-        with:
-          files: final-output/*.html
-          name: ModLoader HTML v${{ env.VERSION }}-${{ env.MODLOADER_VERSION }}-${{ steps.date.outputs.date }}
-          tag_name: modloader-html-${{ env.VERSION }}-${{ env.MODLOADER_VERSION }}-${{ steps.date.outputs.date }}-${{ github.sha }}
-          body: |
-            ModLoader injected HTML for Course of Temptation
-            - Game Version: ${{ env.VERSION }}
-            - ModLoader Version: ${{ env.MODLOADER_VERSION }}
-            - Build Date: ${{ steps.date.outputs.date }}
-          prerelease: true
 
   build_android:
     needs: [check_update, inject_modloader]
@@ -635,7 +618,7 @@ jobs:
           if [ -n "$HTML_FILE" ]; then
             BASENAME=$(basename "$HTML_FILE" .html)
             # 文件名格式: CourseOfTemptation-ModLoader-{GAME_VER}-{ML_VER}.html
-            ML_VER=$(echo "$BASENAME" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | tail -1)
+            ML_VER=$(echo "$BASENAME" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1)
             echo "MODLOADER_VERSION=$ML_VER" >> $GITHUB_ENV
             echo "Detected ModLoader version: $ML_VER"
           else
@@ -837,22 +820,325 @@ jobs:
           path: apk-signed/*.apk
           if-no-files-found: error
 
+
+  build_image_pack:
+    needs: [check_update]
+    if: needs.check_update.outputs.has_update == 'true' && needs.check_update.outputs.android_upload_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.check_update.outputs.version }}
+      ANDROID_UPLOAD_ID: ${{ needs.check_update.outputs.android_upload_id }}
+      ANDROID_BUILD_ID: ${{ needs.check_update.outputs.android_build_id }}
+      GAME_TYPE: ${{ needs.check_update.outputs.game_type }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18.x
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install requests
+
+      - name: Download official Android APK
+        env:
+          ITCH_API_KEY: ${{ secrets.ITCH_API_KEY }}
+          EA_PASSWORD: ${{ github.event.inputs.ea_password }}
+        run: |
+          python << 'EOF'
+          import os
+          import requests
+          
+          upload_id = os.environ["ANDROID_UPLOAD_ID"]
+          build_id = os.environ["ANDROID_BUILD_ID"]
+          api_key = os.environ.get("ITCH_API_KEY", "")
+          ea_password = os.environ.get("EA_PASSWORD", "")
+          game_type = os.environ.get("GAME_TYPE", "stable")
+          
+          download_url = f"https://api.itch.io/uploads/{upload_id}/download"
+          
+          headers = {"Authorization": api_key} if api_key else {}
+          params = {}
+          if game_type == "ea" and ea_password:
+              params["password"] = ea_password
+          
+          print(f"下载Android APK: {download_url}")
+          
+          response = requests.get(download_url, headers=headers, params=params, allow_redirects=True, stream=True)
+          response.raise_for_status()
+          
+          os.makedirs("apk-download", exist_ok=True)
+          apk_path = "apk-download/original.apk"
+          
+          with open(apk_path, "wb") as f:
+              for chunk in response.iter_content(chunk_size=8192):
+                  f.write(chunk)
+          
+          file_size = os.path.getsize(apk_path)
+          print(f"APK已下载: {apk_path} ({file_size / 1024 / 1024:.2f} MB)")
+          EOF
+
+      - name: Extract APK and get img directory
+        run: |
+          echo "检查下载的文件..."
+          file apk-download/original.apk
+          
+          # itch.io下载的是ZIP压缩包，里面包含真正的APK
+          echo "解压外层压缩包..."
+          mkdir -p apk-temp
+          unzip -o apk-download/original.apk -d apk-temp
+          
+          # 找到真正的APK文件
+          REAL_APK=$(find apk-temp -name "*.apk" -type f | head -1)
+          if [ -z "$REAL_APK" ]; then
+            echo "❌ 未找到APK文件"
+            ls -la apk-temp/
+            exit 1
+          fi
+          
+          echo "找到真正的APK: $REAL_APK"
+          
+          # 解压APK获取img目录
+          echo "解压APK获取img目录..."
+          mkdir -p apk-contents
+          unzip -o "$REAL_APK" -d apk-contents
+          
+          # 查找img目录
+          echo "查找img目录..."
+          IMG_DIR=$(find apk-contents -type d -name "img" | head -1)
+          
+          if [ -z "$IMG_DIR" ]; then
+            echo "❌ 未找到img目录"
+            echo "APK内容结构:"
+            find apk-contents -type d | head -30
+            exit 1
+          fi
+          
+          echo "找到img目录: $IMG_DIR"
+          
+          # 移动img目录到工作区
+          mkdir -p game-img
+          cp -r "$IMG_DIR"/* game-img/ || cp -r "$IMG_DIR" game-img/
+          
+          echo "img目录内容:"
+          ls -la game-img/ | head -20
+          echo "..."
+          echo "总文件数: $(find game-img -type f | wc -l)"
+
+      - name: Download ModLoader Package
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          repo: Lyoko-Jeremie/sugarcube-2-ModLoader
+          workflow: Build-ModLoader-Package.yml
+          workflow_conclusion: success
+          name: ModLoader Package
+          path: ModLoader
+          search_artifacts: true
+
+      - name: Verify ModLoader structure
+        run: |
+          echo "=== ModLoader contents ==="
+          ls -la ModLoader/ | head -20
+          
+          if [ ! -d "ModLoader/dist-insertTools" ]; then
+            echo "ERROR: dist-insertTools not found"
+            exit 1
+          fi
+          echo "✓ ModLoader structure OK"
+
+      - name: Checkout GameOriginalImagePackMod
+        uses: actions/checkout@v4
+        with:
+          repository: Lyoko-Jeremie/GameOriginalImagePackMod
+          path: ModLoader/mod/GameOriginalImagePack
+          ref: master
+
+      - name: Build GameOriginalImagePack tools
+        working-directory: ${{ github.workspace }}/ModLoader/mod/GameOriginalImagePack
+        env:
+          YARN_ENABLE_IMMUTABLE_INSTALLS: false
+        run: |
+          echo "Installing dependencies..."
+          yarn install
+          echo "Building TypeScript..."
+          yarn run build:ts || echo "build:ts not found, skipping"
+          echo "Building webpack..."
+          yarn run build:webpack || echo "build:webpack not found, skipping"
+          echo "Building tools..."
+          yarn run build:tools || echo "build:tools not found, skipping"
+
+      - name: Copy img to GameOriginalImagePack
+        run: |
+          echo "Copying img directory to GameOriginalImagePack..."
+          cp -r game-img ModLoader/mod/GameOriginalImagePack/img
+          echo "img目录已复制"
+          ls -la ModLoader/mod/GameOriginalImagePack/
+
+      - name: Generate boot.json and build mod
+        working-directory: ${{ github.workspace }}/ModLoader/mod/GameOriginalImagePack
+        run: |
+          echo "Game Version: $VERSION"
+          
+          # 检查bootJsonFillTool是否存在
+          if [ -f "dist-tools/bootJsonFillTool.js" ]; then
+            echo "Using bootJsonFillTool to generate boot.json..."
+            node "dist-tools/bootJsonFillTool.js" "bootTemplate.json" "img" "$VERSION"
+          elif [ -f "bootTemplate.json" ]; then
+            echo "bootJsonFillTool not found, creating boot.json manually..."
+            # 手动创建boot.json，使用游戏版本作为mod版本
+            cat bootTemplate.json | sed "s/\${GameVersion}/$VERSION/g" > boot.json
+          else
+            echo "Creating default boot.json with game version..."
+            # 使用游戏版本作为mod版本
+            cat > boot.json << BOOTJSON
+          {
+            "name": "GameOriginalImagePack",
+            "version": "$VERSION",
+            "gameVersion": "$VERSION",
+            "description": "Original game images for Course of Temptation",
+            "author": "CoT Team",
+            "dependenceInfo": [
+              {
+                "modName": "ModLoader DoL ImageLoaderHook",
+                "version": "^1.0.0"
+              }
+            ],
+            "imgFileList": []
+          }
+          BOOTJSON
+          fi
+          
+          echo "boot.json content:"
+          cat boot.json | head -30
+          
+          echo ""
+          echo "Packing mod..."
+          node "${{ github.workspace }}/ModLoader/dist-insertTools/packModZip.js" "boot.json"
+          
+          echo "Mod package created:"
+          ls -la *.mod.zip || ls -la *.zip || echo "No zip files found"
+
+      - name: Prepare output
+        run: |
+          mkdir -p image-pack-output
+          
+          # 查找生成的mod.zip文件
+          MOD_FILE=$(find ModLoader/mod/GameOriginalImagePack -name "*.mod.zip" -type f | head -1)
+          if [ -z "$MOD_FILE" ]; then
+            MOD_FILE=$(find ModLoader/mod/GameOriginalImagePack -name "*.zip" -type f | head -1)
+          fi
+          
+          if [ -n "$MOD_FILE" ]; then
+            cp "$MOD_FILE" "image-pack-output/GameOriginalImagePack-${VERSION}.mod.zip"
+            echo "Created: GameOriginalImagePack-${VERSION}.mod.zip"
+          else
+            echo "❌ No mod zip file found"
+            find ModLoader/mod/GameOriginalImagePack -type f -name "*.zip"
+            exit 1
+          fi
+          
+          ls -la image-pack-output/
+
+      - name: Upload GameOriginalImagePack artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GameOriginalImagePack-${{ env.VERSION }}
+          path: image-pack-output/*.mod.zip
+          if-no-files-found: error
+
+  # 统一发布所有构建产物
+  release_all:
+    needs: [check_update, inject_modloader, build_android, build_image_pack]
+    if: always() && needs.check_update.outputs.has_update == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.check_update.outputs.version }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+          merge-multiple: false
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release-files
+          
+          echo "=== Downloaded artifacts ==="
+          find all-artifacts -type f | head -50
+          
+          # 复制所有 HTML 文件
+          find all-artifacts -name "*.html" -exec cp {} release-files/ \;
+          
+          # 复制所有 APK 文件
+          find all-artifacts -name "*.apk" -exec cp {} release-files/ \;
+          
+          # 复制所有 mod.zip 文件
+          find all-artifacts -name "*.mod.zip" -exec cp {} release-files/ \;
+          
+          echo "=== Release files ==="
+          ls -la release-files/
+          
+          # 从文件名提取 ModLoader 版本
+          HTML_FILE=$(ls release-files/*.html 2>/dev/null | grep -v polyfill | head -1)
+          if [ -n "$HTML_FILE" ]; then
+            BASENAME=$(basename "$HTML_FILE" .html)
+            ML_VER=$(echo "$BASENAME" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1)
+            echo "MODLOADER_VERSION=$ML_VER" >> $GITHUB_ENV
+            echo "Detected ModLoader version: $ML_VER"
+          else
+            echo "MODLOADER_VERSION=unknown" >> $GITHUB_ENV
+          fi
+
       - name: Get current date
         id: date
         shell: bash
         run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
 
-      - name: Release Android APK
+      - name: Create unified release
         uses: softprops/action-gh-release@v1
         with:
-          files: apk-signed/*.apk
-          name: Android APK v${{ env.VERSION }}-${{ env.MODLOADER_VERSION }}-${{ steps.date.outputs.date }}
-          tag_name: android-apk-${{ env.VERSION }}-${{ env.MODLOADER_VERSION }}-${{ steps.date.outputs.date }}-${{ github.sha }}
+          files: release-files/*
+          name: CoT ModLoader v${{ env.VERSION }}
+          tag_name: ${{ env.VERSION }}
           body: |
-            ModLoader injected Android APK for Course of Temptation
-            - Game Version: ${{ env.VERSION }}
-            - ModLoader Version: ${{ env.MODLOADER_VERSION }}
-            - Build Date: ${{ steps.date.outputs.date }}
+            ## Course of Temptation ModLoader Release
             
-            ⚠️ This APK is signed with a debug key. You may need to uninstall the original app before installing this version.
+            **Game Version:** ${{ env.VERSION }}
+            **ModLoader Version:** ${{ env.MODLOADER_VERSION }}
+            **Build Date:** ${{ steps.date.outputs.date }}
+            
+            ### 📦 包含内容
+            
+            #### HTML 版本
+            - `CourseOfTemptation-ModLoader-*.html` - 标准版
+            - `CourseOfTemptation-ModLoader-*-polyfill.html` - 兼容版（适用于旧浏览器）
+            
+            #### Android APK
+            - `CoT-ModLoader-*.apk` - 标准版 APK
+            - `CoT-ModLoader-*-polyfill.apk` - 兼容版 APK
+            
+            ⚠️ APK 使用 debug 签名，可能需要先卸载原版应用再安装
+            
+            #### 原版图包
+            - `GameOriginalImagePack-*.mod.zip` - 原版游戏图片包
+            
+            需要 ModLoader DoL ImageLoaderHook 才能使用图片包
           prerelease: true
