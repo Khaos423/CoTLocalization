@@ -2,6 +2,7 @@ import ujson as json
 import os,re
 import shutil
 import emoji
+from urllib.parse import quote
 
 from .consts import *
 from .log import logger
@@ -174,17 +175,13 @@ class Replacer:
             q_patterns = [r'[\u201c\u201d"]', r'\'', r'`']
             q_chinese = ['双引号', '单引号', '反引号']
             for idx_, q_pattern in enumerate(q_patterns):
-                quotes_en = re.findall(q_pattern, line_en)
-                quotes_zh = re.findall(q_pattern, line_zh)
+                quotes_en = len(re.findall(q_pattern, line_en))
+                quotes_zh = len(re.findall(q_pattern, line_zh))
                 if q_pattern == r'\'':
-                    quotes_en_s = re.findall(r'\b[a-zA-Z]\'[a-zA-Z]\b', line_en)
-                    if (len(quotes_en) - len(quotes_en_s) - len(quotes_zh)) % 2 != 0:
-                        logger.error(
-                            f"\t!!! 可能的{q_chinese[idx_]}错误：{line_en} | {line_zh} | https://paratranz.cn/projects/11363/&filename={version}&strings?text={line_key}")
-                else:
-                    if (len(quotes_en) - len(quotes_zh)) % 2 != 0:
-                        logger.error(
-                            f"\t!!! 可能的{q_chinese[idx_]}错误：{line_en} | {line_zh} | https://paratranz.cn/projects/11363/&filename={version}&strings?text={line_key}")
+                    quotes_en = quotes_en - len(re.findall(r'\b[a-zA-Z]\'[a-zA-Z]\b', line_en))
+                if (quotes_en - quotes_zh) % 2 != 0:
+                    logger.error(
+                        f"\t!!! 可能的{q_chinese[idx_]}错误： https://paratranz.cn/projects/11363/strings?key={quote(line_key)}&filename={version}")
 
         for root, dirs, files in os.walk(self.transPath):
             for file in files:
