@@ -147,6 +147,14 @@ jobs:
           cp "i18n-src/i18n.json" "ModLoader/mod/i18n/i18n.json"
           echo "Copied i18n.json to ModLoader/mod/i18n/"
 
+      - name: Copy image files to mod
+        shell: bash
+        run: |
+          mkdir -p "ModLoader/mod/i18n/res/img"
+          cp "modloader/map_town_big.png" "ModLoader/mod/i18n/res/img/map_town_big.png"
+          cp "modloader/map_univ_big.png" "ModLoader/mod/i18n/res/img/map_univ_big.png"
+          echo "Copied image files to ModLoader/mod/i18n/res/img/"
+
       - name: Change Mod Version in boot.json (Nightly)
         if: github.event_name == 'schedule'
         working-directory: ${{ github.workspace }}
